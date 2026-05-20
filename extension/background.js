@@ -353,13 +353,37 @@ async function reconcileStaleRunOnBoot() {
 chrome.alarms.create('keepalive', { periodInMinutes: 0.5 });
 chrome.alarms.create('daily-auto-pipeline', { periodInMinutes: 30 });
 
-// SW 启动顺序:迁 IDB → 修剪旧岗 → 恢复未完成 run
+// SW boot 时关闸:任何 alarm 触发都先等 boot 结束
+// (alarm 可能跨 SW 重启遗留,会在 boot 中途意外推进还没 reconcile 的 run)
+let _bootRecovering = true;
+let _bootDone = null;  // 等 boot 的 Promise(给 advancePipelineRun 用)
+const _bootDonePromise = new Promise((r) => { _bootDone = r; });
+
 (async () => {
+  // 顺序:迁 IDB → 立刻把 running 标 pending 不让任何人误读 → prune → 完整 reconcile
   try { await migrateChromeStorageToIdb(); } catch (e) { console.warn('[boot] idb migrate', e); }
+  try { await earlyResetRunningTasks(); } catch (e) { console.warn('[boot] early reset', e); }
   try { await pruneOldJobs(); } catch (e) { console.warn('[boot] prune', e); }
   try { await reconcileStaleRunOnBoot(); } catch (e) { console.warn('[boot] stale reconcile', e); }
   try { await reconcileActiveRunOnBoot(); } catch (e) { console.warn('[boot] resume', e); }
+  _bootRecovering = false;
+  _bootDone();
 })();
+
+// 启动时立刻把任何 'running' 任务标回 'pending',
+// 不留 boot 期间 stale 'running' 暴露给推进逻辑的窗口
+async function earlyResetRunningTasks() {
+  const run = (await chrome.storage.local.get('pipelineRun')).pipelineRun;
+  if (!run || ['done','error','stopped'].includes(run.stage)) return;
+  const q = (await chrome.storage.local.get('taskQueue')).taskQueue;
+  if (!q || !q.tasks) return;
+  let n = 0;
+  for (const t of q.tasks) if (t.status === 'running') { t.status = 'pending'; n++; }
+  if (n > 0) {
+    await chrome.storage.local.set({ taskQueue: q });
+    console.log(`[boot] early reset ${n} stuck running tasks`);
+  }
+}
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'keepalive') return; // noop,只为保活
   if (alarm.name === 'daily-auto-pipeline') {
@@ -368,6 +392,10 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
   if (alarm.name === ALARM_ADVANCE) {
     try { await advancePipelineRun(); } catch (e) { console.warn('[advance]', e); }
+    return;
+  }
+  if (alarm.name === ALARM_CLEANUP) {
+    try { await handleCleanupAlarm(); } catch (e) { console.warn('[cleanup]', e); }
     return;
   }
 });
@@ -2265,10 +2293,37 @@ async function setPipelineRun(run) {
 async function clearPipelineRun() {
   await chrome.storage.local.remove('pipelineRun');
 }
+// Chrome MV3 production 强制 alarm 最小 30s (delay <30s 会被悄悄拉到 30s)。
+// 为了支持 10-25s 的 task-间冷却,用双轨:
+//   - setTimeout fast-path:SW 活着就靠它推进
+//   - 30s+buffer alarm backstop:SW 死了靠它兜底唤醒
+// _advanceTimer 单实例,避免重复 schedule。
+let _advanceTimer = null;
+let _advanceFireAt = 0;
 async function scheduleAdvance(delayMs) {
-  // chrome.alarms 最小 30s — 但 dev mode 没这个限制
-  // 用 when 比 delayInMinutes 精确
-  chrome.alarms.create(ALARM_ADVANCE, { when: Date.now() + Math.max(50, delayMs) });
+  const d = Math.max(50, delayMs);
+  const fireAt = Date.now() + d;
+  _advanceFireAt = fireAt;
+
+  // 清掉上次的 timer
+  if (_advanceTimer) { clearTimeout(_advanceTimer); _advanceTimer = null; }
+
+  // 短延迟 → setTimeout 推进
+  if (d < 28 * 1000) {
+    _advanceTimer = setTimeout(async () => {
+      _advanceTimer = null;
+      // 兜底 alarm 可能也已经/即将触发,我们靠 _advanceFireAt 去重
+      if (Date.now() >= _advanceFireAt - 200) {
+        _advanceFireAt = 0;
+        try { await advancePipelineRun(); } catch (e) { console.warn('[advance st]', e); }
+      }
+    }, d);
+    // 兜底 alarm: 取 max(30s, d + 5s) 确保 SW 即使死了,30+s 后也能被唤醒
+    chrome.alarms.create(ALARM_ADVANCE, { when: Math.max(Date.now() + 30 * 1000, fireAt + 5 * 1000) });
+  } else {
+    // 长延迟 → 直接 alarm
+    chrome.alarms.create(ALARM_ADVANCE, { when: fireAt });
+  }
 }
 
 async function startPipelineRun(config) {
@@ -2333,6 +2388,11 @@ async function stopPipelineRun() {
 }
 
 async function advancePipelineRun() {
+  // 等 boot 完成,避免 leftover alarm 在 reconcile 跑完前抢先推进
+  if (_bootRecovering) {
+    try { await _bootDonePromise; } catch (e) {}
+  }
+
   const run = await getPipelineRun();
   if (!run) return;
   if (TERMINAL_STAGES.has(run.stage)) return;
@@ -2459,7 +2519,20 @@ async function stepCrawl(run) {
     run.consecutiveRiskCount = 0;
   }
   await setTaskQueue(q);
-  await setPipelineRun(run);
+
+  // 重读 run — task 跑期间可能用户点了 Stop 把 shouldStop 写到 storage
+  // 不能用我们手头的 stale run 对象覆盖掉
+  const fresh = await getPipelineRun();
+  if (fresh) {
+    // merge:我们 task 跑出的本地变化(consecutiveRiskCount)写回,但保留 fresh 的 shouldStop / error
+    fresh.consecutiveRiskCount = run.consecutiveRiskCount;
+    fresh.heartbeat = Date.now();
+    await setPipelineRun(fresh);
+    if (fresh.shouldStop) return await finalizePipelineRun(fresh, 'stopped');
+  } else {
+    // run 被清掉了(罕见)— 啥都不干
+    return;
+  }
 
   log(`  ⏸ 任务间冷却 ${(cooldown/1000).toFixed(0)}s (alarm 接力)`);
   return await scheduleAdvance(cooldown);
@@ -2498,6 +2571,8 @@ async function transitionTo(run, nextStage) {
   return await scheduleAdvance(500);
 }
 
+const ALARM_CLEANUP = 'finalize-cleanup-pipeline-run';
+
 async function finalizePipelineRun(run, finalStage) {
   run.stage = finalStage;
   await setPipelineRun(run);
@@ -2507,15 +2582,22 @@ async function finalizePipelineRun(run, finalStage) {
   log(`✓ 流水线 ${finalStage}`);
   chrome.runtime.sendMessage({ type: 'pipeline_progress', stage: finalStage }).catch(() => {});
 
-  // 30 秒后清理(让 popup 有时间看到 done 状态)
-  setTimeout(async () => {
-    const cur = await getPipelineRun();
-    if (cur && cur.id === run.id) await clearPipelineRun();
-    if (pipelineState.stage === 'done' || pipelineState.stage === 'error') {
-      pipelineState.stage = 'idle';
-      await persistPipelineState();
-    }
-  }, 30000);
+  // 清掉任何遗留的推进 alarm 和 setTimeout
+  if (_advanceTimer) { clearTimeout(_advanceTimer); _advanceTimer = null; }
+  _advanceFireAt = 0;
+  try { await chrome.alarms.clear(ALARM_ADVANCE); } catch (e) {}
+
+  // 30 秒后清掉 pipelineRun — 用 alarm 而非 setTimeout,SW 死了也能清
+  chrome.alarms.create(ALARM_CLEANUP, { when: Date.now() + 30 * 1000 });
+}
+
+async function handleCleanupAlarm() {
+  const cur = await getPipelineRun();
+  if (cur && TERMINAL_STAGES.has(cur.stage)) await clearPipelineRun();
+  if (pipelineState.stage === 'done' || pipelineState.stage === 'error') {
+    pipelineState.stage = 'idle';
+    await persistPipelineState();
+  }
 }
 
 // SW boot 恢复

@@ -1747,6 +1747,37 @@ async function withConcurrency(tasks, limit) {
   return results;
 }
 
+// 指纹 — 影响打分结果的输入若变,旧分数失效需重打
+// (profile 关键字段 + provider/model + prompt 版本 + 是否有 full_jd)
+const PROMPT_VERSION = 'v3.search-intent';
+function djb2(s) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+function profileFingerprint(profile) {
+  const parts = [
+    profile.summary || '',
+    profile.resume_md || '',
+    profile.target_monthly_min, profile.target_monthly_max, profile.target_annual,
+    profile.home_district || '',
+    profile.other_prefs || '',
+    JSON.stringify(profile.priorities || {}),
+  ].join('|');
+  return djb2(parts);
+}
+function jobFingerprint(item) {
+  return djb2([
+    item.job_name || '',
+    item.salary || '',
+    item.has_detail ? '1' : '0',  // full_jd 拿到后,分数应重算
+    (item.full_jd || '').length,
+  ].join('|'));
+}
+function makeScoreFingerprint(profile, providerKey, model, item) {
+  return `${PROMPT_VERSION}|${providerKey}|${model || ''}|p:${profileFingerprint(profile)}|j:${jobFingerprint(item)}`;
+}
+
 async function scoreAllUnscored() {
   const profile = await getProfile();
   const api = await getApiConfig();
@@ -1758,8 +1789,26 @@ async function scoreAllUnscored() {
 
   const jobsMap = await getJobsMap();
   const allKeys = Object.keys(jobsMap);
-  const targetKeys = allKeys.filter((k) => !jobsMap[k].score_priority);
-  if (targetKeys.length === 0) return { scored: 0, skipped: allKeys.length };
+  // 重打条件:
+  //  (1) 未打分 (无 score_priority)
+  //  (2) 已打分但指纹不匹配 (简历/偏好/provider/model/JD 变了)
+  //  (3) 用户标记 not_interested 的不重打
+  // 同时:black-listed company 直接 Reject,不送 LLM
+  const targetKeys = [];
+  for (const k of allKeys) {
+    const item = jobsMap[k];
+    if (item.user_marked === 'not_interested' || item.user_marked === 'applied') continue;
+    const fp = makeScoreFingerprint(profile, activeProvider, providerConfig.model, item);
+    if (!item.score_priority) {
+      targetKeys.push(k);
+    } else if (item.score_fingerprint !== fp) {
+      targetKeys.push(k);  // 输入变了,重打
+    }
+  }
+  if (targetKeys.length === 0) {
+    log(`✓ 无需打分: 全部 ${allKeys.length} 条已是当前指纹`);
+    return { scored: 0, skipped: allKeys.length };
+  }
 
   let progress = 0;
   let failed = 0;
@@ -1794,6 +1843,8 @@ async function scoreAllUnscored() {
       item.score_concerns = r.concerns;
       item.score_pitch = r.pitch || '';
       item.score_resume_version = r.resume_version || '';
+      item.score_fingerprint = makeScoreFingerprint(profile, activeProvider, providerConfig.model, item);
+      item.score_at = Date.now();
       progress++;
     } catch (e) {
       failed++;

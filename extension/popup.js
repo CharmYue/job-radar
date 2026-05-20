@@ -584,6 +584,10 @@ function renderKeywordChips() {
   }
 }
 $('keywordInput').addEventListener('keydown', (e) => {
+  // ★ IME 中文输入法确认候选词时也会发 Enter,但 e.isComposing=true / keyCode=229
+  // 这种情况只是确认候选词,不应该当成"添加关键词"
+  if (e.isComposing || e.keyCode === 229) return;
+
   if (e.key === 'Enter') {
     e.preventDefault();
     const v = e.target.value.trim();

@@ -52,6 +52,15 @@ let pendingContext = null;     // { keyword, city }
 let riskFlag = false;          // 当前关键词内 fetch 拦截到风控信号
 let pageResponseCounter = 0;   // 当前关键词收到的有效响应数(用于"首页确认数据到达")
 
+// 一键流水线状态
+const pipelineState = {
+  stage: 'idle',     // idle | crawling | scoring | pushing | done | error
+  startedAt: null,
+  progress: '',
+  error: '',
+  shouldStop: false,
+};
+
 // ============================================================
 // 工具
 // ============================================================
@@ -277,13 +286,127 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case 'list_jobs': {
           const jobsMap = await getJobsMap();
           const items = Object.values(jobsMap);
-          // 按 score 倒序 + 未打分排最后
           items.sort((a, b) => {
             const sa = a.score_priority ? (a.score || 0) : -1;
             const sb = b.score_priority ? (b.score || 0) : -1;
             return sb - sa;
           });
           sendResponse({ ok: true, items });
+          break;
+        }
+        case 'pipeline_status': {
+          sendResponse({
+            ok: true,
+            pipeline: pipelineState,
+            crawl: {
+              running: state.running,
+              progress: state.running ? {
+                ki: state.currentKeywordIdx,
+                kt: state.currentKeywordTotal,
+                p: state.currentPage,
+                added: state.added,
+              } : null,
+            },
+          });
+          break;
+        }
+        case 'run_pipeline':
+          try {
+            await runPipeline(msg.config);
+            sendResponse({ ok: true });
+          } catch (e) {
+            sendResponse({ ok: false, error: e.message });
+          }
+          break;
+        case 'stop_pipeline':
+          pipelineState.shouldStop = true;
+          sendResponse({ ok: true });
+          break;
+        case 'list_presets':
+          sendResponse({ ok: true, presets: await getPresets() });
+          break;
+        case 'save_preset': {
+          const ps = await getPresets();
+          ps[msg.name] = msg.config;
+          await chrome.storage.local.set({ presets: ps });
+          sendResponse({ ok: true });
+          break;
+        }
+        case 'load_preset': {
+          const ps = await getPresets();
+          if (!ps[msg.name]) { sendResponse({ ok: false, error: '预设不存在' }); break; }
+          sendResponse({ ok: true, config: ps[msg.name] });
+          break;
+        }
+        case 'delete_preset': {
+          const ps = await getPresets();
+          delete ps[msg.name];
+          await chrome.storage.local.set({ presets: ps });
+          sendResponse({ ok: true });
+          break;
+        }
+        case 'mark_job': {
+          const jobsMap = await getJobsMap();
+          const item = jobsMap[msg.job_id];
+          if (!item) { sendResponse({ ok: false, error: '岗位不存在' }); break; }
+          if (msg.mark === null) {
+            delete item.marked;
+          } else {
+            item.marked = msg.mark;
+          }
+          if (msg.block_company && item.company_id) {
+            const blk = await getBlocked();
+            blk[item.company_id] = { company_name: item.company_name, ts: Date.now() };
+            await chrome.storage.local.set({ blockedCompanies: blk });
+            // 顺手把数据池里这家公司其他岗位也标 not_interested
+            for (const k of Object.keys(jobsMap)) {
+              if (jobsMap[k].company_id === item.company_id) jobsMap[k].marked = 'not_interested';
+            }
+          }
+          await setJobsMap(jobsMap);
+          sendResponse({ ok: true });
+          break;
+        }
+        case 'list_blocked': {
+          const blk = await getBlocked();
+          const arr = Object.entries(blk).map(([cid, v]) => ({ company_id: cid, company_name: v.company_name }));
+          sendResponse({ ok: true, blocked: arr });
+          break;
+        }
+        case 'unblock_company': {
+          const blk = await getBlocked();
+          delete blk[msg.company_id];
+          await chrome.storage.local.set({ blockedCompanies: blk });
+          // 同时把数据池里该公司的 not_interested 标记清掉
+          const jobsMap = await getJobsMap();
+          for (const k of Object.keys(jobsMap)) {
+            if (jobsMap[k].company_id === msg.company_id && jobsMap[k].marked === 'not_interested') {
+              delete jobsMap[k].marked;
+            }
+          }
+          await setJobsMap(jobsMap);
+          sendResponse({ ok: true });
+          break;
+        }
+        case 'list_history':
+          sendResponse({ ok: true, history: await getHistory() });
+          break;
+        case 'clear_history':
+          await chrome.storage.local.remove('history');
+          sendResponse({ ok: true });
+          break;
+        case 'clear_scores': {
+          const jobsMap = await getJobsMap();
+          for (const k of Object.keys(jobsMap)) {
+            delete jobsMap[k].score;
+            delete jobsMap[k].score_priority;
+            delete jobsMap[k].score_reason;
+            delete jobsMap[k].score_concerns;
+            delete jobsMap[k].score_pitch;
+            delete jobsMap[k].score_resume_version;
+          }
+          await setJobsMap(jobsMap);
+          sendResponse({ ok: true });
           break;
         }
         default:
@@ -317,13 +440,17 @@ async function handleIntercepted(payload) {
   const companyTokens = companyFilter
     ? companyFilter.split(/[,\s]+/).filter(Boolean).map((s) => s.toLowerCase())
     : [];
+  // 屏蔽公司(company_id 黑名单)
+  const blocked = await getBlocked();
 
   const jobs = await getJobsMap();
   let added = 0;
   let filtered = 0;
+  let blockedCount = 0;
   for (const raw of list) {
     const item = normalize(raw, pendingContext);
     if (!item.job_id || jobs[item.job_id]) continue;
+    if (item.company_id && blocked[item.company_id]) { blockedCount++; continue; }
     if (companyTokens.length > 0) {
       const brand = (item.company_name || '').toLowerCase();
       const matched = companyTokens.some((t) => brand.indexOf(t) !== -1);
@@ -340,7 +467,8 @@ async function handleIntercepted(payload) {
   state.added += added;
 
   const flt = filtered > 0 ? ` 公司过滤 -${filtered}` : '';
-  log(`  ✓ ${progressLine()} 捕获 ${list.length} 条,新增 ${added}${flt} (累计 ${state.added})`);
+  const blk = blockedCount > 0 ? ` 屏蔽 -${blockedCount}` : '';
+  log(`  ✓ ${progressLine()} 捕获 ${list.length} 条,新增 ${added}${flt}${blk} (累计 ${state.added})`);
 
   if (state.config.maxTotal > 0 && state.added >= state.config.maxTotal) {
     state.reachedMaxTotal = true;
@@ -1219,16 +1347,125 @@ async function pushWxPusher(md, summary, apiToken, uid) {
 async function pushNow() {
   const api = await getApiConfig();
   if (!api.wxpusher_token || !api.wxpusher_uid) {
-    throw new Error('未配置 WxPusher,先去「个人画像」标签填');
+    throw new Error('未配置 WxPusher,先去画像标签填');
   }
   const jobsMap = await getJobsMap();
-  const items = Object.values(jobsMap).filter((j) => j.score_priority);
-  if (items.length === 0) throw new Error('没有已打分的岗位,请先点「全部打分」');
+  // 推送时排除已标记 not_interested
+  const items = Object.values(jobsMap)
+    .filter((j) => j.score_priority && j.marked !== 'not_interested');
+  if (items.length === 0) throw new Error('没有已打分的岗位,请先点「AI 全部打分」');
 
   const today = new Date().toISOString().slice(0, 10);
   const { md, counts } = buildCompactReport(items, today);
   const summary = `Boss 雷达 ${today} | ${counts.S} S / ${counts.A} A`;
   await pushWxPusher(md, summary, api.wxpusher_token, api.wxpusher_uid);
   log(`✓ WxPusher 推送成功: ${summary}`);
+
+  // 写入历史
+  await appendHistory({
+    date: today,
+    ts: Date.now(),
+    pushed_total: items.length,
+    S: counts.S, A: counts.A, B: counts.B, C: counts.C, Reject: counts.Reject,
+  });
+
   return { total: items.length, counts };
+}
+
+// ============================================================
+// 预设 / 屏蔽公司 / 历史
+// ============================================================
+async function getPresets() {
+  return (await chrome.storage.local.get('presets')).presets || {};
+}
+async function getBlocked() {
+  return (await chrome.storage.local.get('blockedCompanies')).blockedCompanies || {};
+}
+async function getHistory() {
+  return (await chrome.storage.local.get('history')).history || [];
+}
+async function appendHistory(entry) {
+  const cur = await getHistory();
+  // 同日覆盖
+  const without = cur.filter((h) => h.date !== entry.date);
+  without.push(entry);
+  // 保留近 30 条
+  const trimmed = without.slice(-30);
+  await chrome.storage.local.set({ history: trimmed });
+}
+
+// ============================================================
+// 一键流水线
+// ============================================================
+async function runPipeline(config) {
+  if (pipelineState.stage === 'crawling' || pipelineState.stage === 'scoring' || pipelineState.stage === 'pushing') {
+    throw new Error('流水线已在跑');
+  }
+  pipelineState.shouldStop = false;
+  pipelineState.error = '';
+  pipelineState.startedAt = Date.now();
+  const notifyStage = (stage, msg) => {
+    pipelineState.stage = stage;
+    pipelineState.progress = msg || '';
+    chrome.runtime.sendMessage({ type: 'pipeline_progress', stage: msg || stage }).catch(() => {});
+  };
+
+  try {
+    // 阶段 1: 采集(如果有队列)
+    if (config && config.tasks && config.tasks.length > 0) {
+      notifyStage('crawling', `采集 — ${config.tasks.length} 任务`);
+      // 直接调 startCrawl 并 await 它的内部完成事件
+      // 我们用一个 promise 包一下:监听 state.running 转 false
+      await runCrawlAndWait({ ...config, resume: false });
+      if (pipelineState.shouldStop) {
+        notifyStage('idle', '已停止');
+        return;
+      }
+    } else {
+      log('  · 跳过采集(没有待跑队列)');
+    }
+
+    // 阶段 2: 打分
+    if (pipelineState.shouldStop) { notifyStage('idle', '已停止'); return; }
+    notifyStage('scoring', '打分');
+    const scoreRes = await scoreAllUnscored();
+    log(`  · 打分阶段: 新增 ${scoreRes.scored} 跳过 ${scoreRes.skipped}`);
+
+    // 阶段 3: 推送
+    if (pipelineState.shouldStop) { notifyStage('idle', '已停止'); return; }
+    notifyStage('pushing', '推送 WxPusher');
+    const pushRes = await pushNow();
+    log(`  · 推送成功: ${pushRes.total} 条`);
+
+    notifyStage('done', '完成');
+    log('✓ 一键流水线全部完成');
+    // 30 秒后回到 idle
+    setTimeout(() => {
+      if (pipelineState.stage === 'done') notifyStage('idle', '');
+    }, 30000);
+  } catch (e) {
+    pipelineState.stage = 'error';
+    pipelineState.error = e.message;
+    log(`✗ 流水线异常: ${e.message}`);
+    chrome.runtime.sendMessage({ type: 'pipeline_progress', stage: '出错: ' + e.message }).catch(() => {});
+    throw e;
+  }
+}
+
+function runCrawlAndWait(config) {
+  return new Promise((resolve, reject) => {
+    if (state.running) { reject(new Error('采集已在跑')); return; }
+    startCrawl(config).catch(() => {});
+    const startTs = Date.now();
+    let everRan = false;
+    const poll = setInterval(() => {
+      if (pipelineState.shouldStop && state.running) state.shouldStop = true;
+      if (state.running) everRan = true;
+      // 等 state.running 起来再等它落下来,或 5s 没起来就视为 startCrawl 已退出
+      if (!state.running && (everRan || Date.now() - startTs > 5000)) {
+        clearInterval(poll);
+        resolve();
+      }
+    }, 500);
+  });
 }

@@ -1,533 +1,161 @@
 // ============================================================
-// popup.js — Boss 求职雷达 (采集 + 打分 + 推送)
+// popup.js — Boss 求职雷达 (重构版)
 // ============================================================
 
 const $ = (id) => document.getElementById(id);
 
-// 全局: 字典 + 当前选择
 let DICT = null;
-const sel = {
-  positions: new Set(),
-  cities: new Set(),
-};
+const sel = { positions: new Set(), cities: new Set() };
+let keywords = [];
+let resultFilter = 'all';
 
 // ============================================================
-// 字典
+// 入口
 // ============================================================
+async function init() {
+  await loadDict();
+  renderPositionTree();
+  renderCityGrid();
+  fillFilters();
+  bindEvents();
+  // 默认 tab 是 profile,需显式初始化一次内容
+  await loadProfileIntoUI();
+  await refreshAll();
+  setInterval(refreshAll, 2500);
+}
 async function loadDict() {
-  const url = chrome.runtime.getURL('dict.json');
-  const r = await fetch(url);
+  const r = await fetch(chrome.runtime.getURL('dict.json'));
   DICT = await r.json();
+}
+
+// ============================================================
+// 通用刷新(顶部 + 当前 tab)
+// ============================================================
+async function refreshAll() {
+  // 轻量级:仅 banner + pipeline + 当前 tab 的非破坏性内容
+  await refreshOnboardingBanner();
+  await refreshPipelineState();
+  const active = document.querySelector('.tab.active');
+  if (!active) return;
+  const panel = active.dataset.panel;
+  // profile tab 不在 poll 时刷新(避免覆盖用户正在输入的字段)
+  if (panel === 'run') { await refreshPool(); await refreshScored(); await refreshQueue(); }
+  if (panel === 'history') { await refreshHistory(); await refreshBlocked(); }
+}
+
+// ============================================================
+// 引导 banner — 检查画像 + API 完整度
+// ============================================================
+async function refreshOnboardingBanner() {
+  const r = await chrome.runtime.sendMessage({ type: 'get_profile' });
+  const p = (r && r.ok) ? r.profile : {};
+  const ar = await chrome.runtime.sendMessage({ type: 'get_api' });
+  const a = (ar && ar.ok) ? ar.api : {};
+
+  const banner = $('banner');
+  const missing = [];
+  if (!p.summary) missing.push('summary');
+  if (!p.resume_md) missing.push('简历');
+  if (!p.s_tier_roles || p.s_tier_roles.length === 0) missing.push('S 级关键词');
+  if (!a.deepseek_key) missing.push('DeepSeek key');
+  if (!a.wxpusher_token || !a.wxpusher_uid) missing.push('WxPusher');
+
+  if (missing.length > 0) {
+    banner.className = 'show';
+    banner.innerHTML = `⚠️ 第一步先到「画像」配置 — 还缺: <b>${missing.join(' / ')}</b>。 <a id="bannerJumpProfile">去填 →</a>`;
+    $('bannerJumpProfile').addEventListener('click', () => switchTab('profile'));
+    // 锁住其他 tab
+    document.querySelectorAll('.tab').forEach((t) => {
+      if (t.dataset.panel !== 'profile') t.classList.add('locked');
+    });
+  } else {
+    banner.className = 'show ok';
+    banner.innerHTML = '✅ 画像就绪。<a id="bannerJumpRun">直接去跑一轮 →</a>';
+    $('bannerJumpRun').addEventListener('click', () => switchTab('run'));
+    document.querySelectorAll('.tab.locked').forEach((t) => t.classList.remove('locked'));
+  }
+}
+
+// ============================================================
+// Pipeline 状态(顶部 + 阶段条)
+// ============================================================
+async function refreshPipelineState() {
+  const r = await chrome.runtime.sendMessage({ type: 'pipeline_status' });
+  const p = (r && r.ok) ? r.pipeline : { stage: 'idle' };
+  const s = (r && r.ok) ? r.crawl : { running: false };
+
+  // 顶部状态徽章
+  $('state').textContent =
+    p.stage === 'crawling' ? '采集中' :
+    p.stage === 'scoring'  ? '打分中' :
+    p.stage === 'pushing'  ? '推送中' :
+    p.stage === 'done'     ? '已完成' :
+    p.stage === 'error'    ? '出错' :
+    s.running              ? '采集中' : '空闲';
+  $('state').className = (p.stage !== 'idle' && p.stage !== 'done') || s.running ? 'state running' : 'state';
+
+  // 阶段条
+  const setStage = (id, st) => {
+    const el = $(id);
+    if (el) el.className = 'stage' + (st ? ' ' + st : '');
+  };
+  setStage('stageCrawl',
+    p.stage === 'crawling' ? 'active' :
+    ['scoring', 'pushing', 'done'].includes(p.stage) ? 'done' : '');
+  setStage('stageScore',
+    p.stage === 'scoring' ? 'active' :
+    ['pushing', 'done'].includes(p.stage) ? 'done' : '');
+  setStage('stagePush',
+    p.stage === 'pushing' ? 'active' :
+    p.stage === 'done' ? 'done' : '');
+
+  // 主按钮
+  const piRunning = p.stage === 'crawling' || p.stage === 'scoring' || p.stage === 'pushing';
+  $('runPipeline').style.display = piRunning ? 'none' : 'block';
+  $('stopPipeline').style.display = piRunning ? 'block' : 'none';
+
+  // 分步按钮
+  $('startCrawl').disabled = piRunning || s.running;
+  $('resumeCrawl').disabled = piRunning || s.running;
+  $('stopCrawl').disabled = !s.running;
+  $('scoreAll').disabled = piRunning;
+  $('pushNow').disabled = piRunning;
+
+  // 进度
+  const prog = p.progress || (s.progress ? `[${s.progress.ki}/${s.progress.kt} | R${s.progress.p} | +${s.progress.added}]` : '');
+  $('progress').textContent = prog;
 }
 
 // ============================================================
 // Tabs
 // ============================================================
+async function switchTab(panel) {
+  document.querySelectorAll('.tab').forEach((t) => {
+    if (t.classList.contains('locked')) return;
+    t.classList.toggle('active', t.dataset.panel === panel);
+  });
+  document.querySelectorAll('.panel').forEach((x) => {
+    x.classList.toggle('active', x.id === 'panel-' + panel);
+  });
+  // 切到 profile 或 search 时,显式加载该 tab 一次
+  if (panel === 'profile') await loadProfileIntoUI();
+  if (panel === 'search') await refreshPresetDropdown();
+  await refreshAll();
+}
+
 document.querySelectorAll('.tab').forEach((t) => {
   t.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach((x) => x.classList.remove('active'));
-    document.querySelectorAll('.panel').forEach((x) => x.classList.remove('active'));
-    t.classList.add('active');
-    $('panel-' + t.dataset.panel).classList.add('active');
-    if (t.dataset.panel === 'queue') refreshQueue();
-    if (t.dataset.panel === 'run') { refreshStatus(); refreshScored(); }
-    if (t.dataset.panel === 'profile') loadProfileIntoUI();
+    if (t.classList.contains('locked')) {
+      alert('请先完成画像配置');
+      return;
+    }
+    switchTab(t.dataset.panel);
   });
 });
 
 // ============================================================
-// 渲染职位树
+// 画像:完成度 checklist + load/save + yaml/resume 导入
 // ============================================================
-function renderPositionTree(filter = '') {
-  const root = $('positionTree');
-  root.innerHTML = '';
-  const flo = filter.toLowerCase();
-
-  for (const l1 of DICT.positions) {
-    const l1Wrap = document.createElement('div');
-    const l1Header = document.createElement('div');
-    l1Header.className = 'tree-l1';
-    const arrow1 = document.createElement('span');
-    arrow1.className = 'toggle-arrow';
-    arrow1.textContent = '▶';
-    l1Header.appendChild(arrow1);
-
-    const cb1 = document.createElement('input');
-    cb1.type = 'checkbox';
-    cb1.dataset.role = 'l1';
-    cb1.dataset.code = l1.code;
-    l1Header.appendChild(cb1);
-
-    const lbl1 = document.createElement('span');
-    lbl1.textContent = l1.name;
-    l1Header.appendChild(lbl1);
-
-    const cnt1 = document.createElement('span');
-    cnt1.className = 'count';
-    let l3TotalInL1 = 0;
-    for (const l2 of l1.children) l3TotalInL1 += l2.children.length;
-    cnt1.textContent = `${l3TotalInL1} 个`;
-    l1Header.appendChild(cnt1);
-
-    const l2Wrap = document.createElement('div');
-    l2Wrap.className = 'tree-l2-wrap';
-
-    let l1HasMatch = false;
-    for (const l2 of l1.children) {
-      const l2NodeWrap = document.createElement('div');
-      const l2Header = document.createElement('div');
-      l2Header.className = 'tree-l2';
-      const arrow2 = document.createElement('span');
-      arrow2.className = 'toggle-arrow';
-      arrow2.textContent = '▶';
-      l2Header.appendChild(arrow2);
-      const cb2 = document.createElement('input');
-      cb2.type = 'checkbox';
-      cb2.dataset.role = 'l2';
-      cb2.dataset.code = l2.code;
-      l2Header.appendChild(cb2);
-      const lbl2 = document.createElement('span');
-      lbl2.textContent = `${l2.name} (${l2.children.length})`;
-      l2Header.appendChild(lbl2);
-
-      const l3Wrap = document.createElement('div');
-      l3Wrap.className = 'tree-l3-wrap';
-
-      let l2HasMatch = false;
-      for (const l3 of l2.children) {
-        if (flo && l3.name.toLowerCase().indexOf(flo) === -1) continue;
-        l2HasMatch = true;
-        const l3Node = document.createElement('div');
-        l3Node.className = 'tree-l3';
-        const cb3 = document.createElement('input');
-        cb3.type = 'checkbox';
-        cb3.dataset.role = 'l3';
-        cb3.dataset.code = l3.code;
-        cb3.dataset.name = l3.name;
-        cb3.checked = sel.positions.has(l3.code);
-        cb3.addEventListener('change', () => {
-          if (cb3.checked) sel.positions.add(l3.code);
-          else sel.positions.delete(l3.code);
-          updateSelCounts();
-          syncParentChecks();
-        });
-        const lab = document.createElement('label');
-        lab.appendChild(cb3);
-        lab.appendChild(document.createTextNode(' ' + l3.name));
-        l3Node.appendChild(lab);
-        l3Wrap.appendChild(l3Node);
-      }
-
-      if (l2HasMatch) {
-        l2Header.addEventListener('click', (e) => {
-          if (e.target.tagName === 'INPUT') return;
-          arrow2.classList.toggle('open');
-          l3Wrap.classList.toggle('open');
-        });
-        cb2.addEventListener('change', () => {
-          l3Wrap.querySelectorAll('input[data-role="l3"]').forEach((cb) => {
-            cb.checked = cb2.checked;
-            if (cb2.checked) sel.positions.add(cb.dataset.code);
-            else sel.positions.delete(cb.dataset.code);
-          });
-          updateSelCounts();
-          syncParentChecks();
-        });
-        l2NodeWrap.appendChild(l2Header);
-        l2NodeWrap.appendChild(l3Wrap);
-        l2Wrap.appendChild(l2NodeWrap);
-        if (flo) { arrow2.classList.add('open'); l3Wrap.classList.add('open'); }
-        l1HasMatch = true;
-      }
-    }
-
-    if (l1HasMatch) {
-      l1Header.addEventListener('click', (e) => {
-        if (e.target.tagName === 'INPUT') return;
-        arrow1.classList.toggle('open');
-        l2Wrap.classList.toggle('open');
-      });
-      cb1.addEventListener('change', () => {
-        l2Wrap.querySelectorAll('input[data-role="l3"]').forEach((cb) => {
-          cb.checked = cb1.checked;
-          if (cb1.checked) sel.positions.add(cb.dataset.code);
-          else sel.positions.delete(cb.dataset.code);
-        });
-        l2Wrap.querySelectorAll('input[data-role="l2"]').forEach((cb) => {
-          cb.checked = cb1.checked;
-        });
-        updateSelCounts();
-      });
-      l1Wrap.appendChild(l1Header);
-      l1Wrap.appendChild(l2Wrap);
-      root.appendChild(l1Wrap);
-      if (flo) { arrow1.classList.add('open'); l2Wrap.classList.add('open'); }
-    }
-  }
-  syncParentChecks();
-}
-
-function syncParentChecks() {
-  document.querySelectorAll('input[data-role="l2"]').forEach((cb) => {
-    const wrap = cb.closest('.tree-l2').parentElement.querySelector('.tree-l3-wrap');
-    if (!wrap) return;
-    const l3s = wrap.querySelectorAll('input[data-role="l3"]');
-    const total = l3s.length;
-    let checked = 0;
-    l3s.forEach((c) => { if (c.checked) checked++; });
-    cb.checked = total > 0 && checked === total;
-    cb.indeterminate = checked > 0 && checked < total;
-  });
-  document.querySelectorAll('input[data-role="l1"]').forEach((cb) => {
-    const wrap = cb.closest('.tree-l1').parentElement.querySelector('.tree-l2-wrap');
-    if (!wrap) return;
-    const l3s = wrap.querySelectorAll('input[data-role="l3"]');
-    const total = l3s.length;
-    let checked = 0;
-    l3s.forEach((c) => { if (c.checked) checked++; });
-    cb.checked = total > 0 && checked === total;
-    cb.indeterminate = checked > 0 && checked < total;
-  });
-}
-
-// ============================================================
-// 渲染城市
-// ============================================================
-function renderCityGrid(filter = '') {
-  const root = $('cityGrid');
-  root.innerHTML = '';
-  const flo = filter.toLowerCase();
-
-  const all = [];
-  for (const c of DICT.cities.hot) all.push(c);
-  for (const g of DICT.cities.byLetter) {
-    for (const c of g.cities) all.push(c);
-  }
-  const seen = new Set();
-  const uniq = [];
-  for (const c of all) {
-    if (seen.has(c.code)) continue;
-    seen.add(c.code);
-    uniq.push(c);
-  }
-  for (const c of uniq) {
-    if (flo && c.name.indexOf(filter) === -1) continue;
-    const lbl = document.createElement('label');
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.dataset.code = c.code;
-    cb.dataset.name = c.name;
-    cb.checked = sel.cities.has(c.code);
-    cb.addEventListener('change', () => {
-      if (cb.checked) sel.cities.add(c.code);
-      else sel.cities.delete(c.code);
-      updateSelCounts();
-    });
-    lbl.appendChild(cb);
-    lbl.appendChild(document.createTextNode(' ' + c.name));
-    root.appendChild(lbl);
-  }
-}
-
-// ============================================================
-// 填充筛选下拉 (经验 / 学历 / 薪资)
-// ============================================================
-function fillFilters() {
-  const exp = $('filterExp');
-  for (const e of DICT.filters.experiences) {
-    if (e.code === 0) continue;
-    const opt = document.createElement('option');
-    opt.value = e.code;
-    opt.textContent = e.name;
-    exp.appendChild(opt);
-  }
-  const deg = $('filterDeg');
-  for (const d of DICT.filters.degrees) {
-    if (d.code === 0) continue;
-    const opt = document.createElement('option');
-    opt.value = d.code;
-    opt.textContent = d.name;
-    deg.appendChild(opt);
-  }
-  const sal = $('filterSalary');
-  for (const s of DICT.filters.salaries) {
-    if (s.code === 0) continue;
-    const opt = document.createElement('option');
-    opt.value = s.code;
-    opt.textContent = s.name;
-    sal.appendChild(opt);
-  }
-}
-
-// ============================================================
-// 选择数 + 组合估算
-// ============================================================
-function customQueryList() {
-  return $('customQueries').value
-    .split('\n')
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-function updateSelCounts() {
-  $('selPosCount').textContent = sel.positions.size;
-  $('selCityCount').textContent = sel.cities.size;
-  const customs = customQueryList().length;
-  const combo = (sel.positions.size + customs) * sel.cities.size;
-  $('comboCount').textContent = combo;
-  const minutes = combo * 4;
-  let est;
-  if (minutes < 60) est = `≈ ${minutes} 分钟`;
-  else if (minutes < 60 * 24) est = `≈ ${(minutes/60).toFixed(1)} 小时`;
-  else est = `≈ ${(minutes/60/24).toFixed(1)} 天`;
-  $('comboEst').textContent = combo > 0 ? `(预计 ${est})` : '';
-}
-
-// ============================================================
-// 生成任务队列
-// ============================================================
-async function buildTasksAndSave() {
-  const customs = customQueryList();
-  if (sel.positions.size === 0 && customs.length === 0) {
-    alert('请至少选 1 个职位 或 填 1 行关键词');
-    return;
-  }
-  if (sel.cities.size === 0) {
-    alert('请至少选 1 个城市');
-    return;
-  }
-
-  const posMap = new Map();
-  for (const l1 of DICT.positions) {
-    for (const l2 of l1.children) {
-      for (const l3 of l2.children) {
-        posMap.set(l3.code, l3.name);
-      }
-    }
-  }
-  const cityMap = new Map();
-  for (const c of DICT.cities.hot) cityMap.set(c.code, c.name);
-  for (const g of DICT.cities.byLetter) {
-    for (const c of g.cities) cityMap.set(c.code, c.name);
-  }
-
-  const filterExp = $('filterExp').value;
-  const filterDeg = $('filterDeg').value;
-  const filterSalary = $('filterSalary').value;
-  const filterDate = $('filterDate').value;
-
-  const tasks = [];
-  // 1. 职位树任务
-  for (const p of sel.positions) {
-    for (const c of sel.cities) {
-      tasks.push({
-        positionCode: p,
-        positionName: posMap.get(p) || String(p),
-        cityCode: c,
-        cityName: cityMap.get(c) || String(c),
-        experience: filterExp || '',
-        degree: filterDeg || '',
-        salary: filterSalary || '',
-        dateType: filterDate || '',
-      });
-    }
-  }
-  // 2. 自由关键词任务
-  for (const q of customs) {
-    for (const c of sel.cities) {
-      tasks.push({
-        query: q,
-        positionName: `[关键词] ${q}`,
-        cityCode: c,
-        cityName: cityMap.get(c) || String(c),
-        experience: filterExp || '',
-        degree: filterDeg || '',
-        salary: filterSalary || '',
-        dateType: filterDate || '',
-      });
-    }
-  }
-
-  await chrome.storage.local.set({
-    pendingConfig: {
-      tasks,
-      sortMode:   $('sortMode').value,
-      runMode:    $('runMode').value,
-      maxScrolls: parseInt($('maxScrolls').value) || 15,
-      maxTotal:   parseInt($('maxTotal').value) || 0,
-      dwellMin:   parseFloat($('dwellMin').value) || 2,
-      dwellMax:   parseFloat($('dwellMax').value) || 5,
-      gapMin:     parseFloat($('gapMin').value)   || 10,
-      gapMax:     parseFloat($('gapMax').value)   || 25,
-      companyFilter: $('filterCompany').value.trim(),
-    },
-  });
-
-  alert(`已生成 ${tasks.length} 个任务,切到"运行"标签点开始`);
-  document.querySelector('.tab[data-panel="queue"]').click();
-  await chrome.runtime.sendMessage({ type: 'clear_queue' });
-}
-
-// ============================================================
-// 队列面板
-// ============================================================
-async function refreshQueue() {
-  const r = await chrome.runtime.sendMessage({ type: 'get_queue' });
-  const list = $('queueList');
-  let q = r && r.ok ? r.queue : null;
-
-  if (!q) {
-    const pc = (await chrome.storage.local.get('pendingConfig')).pendingConfig;
-    if (pc && pc.tasks && pc.tasks.length) {
-      q = {
-        tasks: pc.tasks.map((t, i) => ({
-          ...t, id: i, status: 'pending', captured: 0,
-        })),
-      };
-    }
-  }
-
-  if (!q || !q.tasks || q.tasks.length === 0) {
-    list.textContent = '(尚未生成队列)';
-    $('qTotal').textContent = '0';
-    $('qDone').textContent = '0';
-    $('qFail').textContent = '0';
-    $('qPending').textContent = '0';
-    return;
-  }
-
-  list.innerHTML = '';
-  let nDone = 0, nFail = 0, nPending = 0;
-  for (const t of q.tasks) {
-    const row = document.createElement('div');
-    row.className = 'queue-row';
-    const left = document.createElement('span');
-    left.textContent = `${t.positionName} @ ${t.cityName}` +
-      (t.experience ? ` exp=${t.experience}` : '') +
-      (t.captured > 0 ? `  +${t.captured}` : '');
-    const right = document.createElement('span');
-    right.className = 'queue-status qs-' + t.status;
-    right.textContent = t.status;
-    row.appendChild(left);
-    row.appendChild(right);
-    list.appendChild(row);
-
-    if (t.status === 'done') nDone++;
-    else if (t.status === 'failed' || t.status === 'failed_skipped') nFail++;
-    else if (t.status === 'pending') nPending++;
-  }
-  $('qTotal').textContent = q.tasks.length;
-  $('qDone').textContent = nDone;
-  $('qFail').textContent = nFail;
-  $('qPending').textContent = nPending;
-}
-
-// ============================================================
-// 运行面板
-// ============================================================
-function appendLog(msg) {
-  const t = new Date().toTimeString().slice(0, 8);
-  $('log').textContent += `[${t}] ${msg}\n`;
-  $('log').scrollTop = $('log').scrollHeight;
-}
-
-function setRunning(running) {
-  $('state').textContent = running ? '运行中' : '空闲';
-  $('state').style.background = running ? '#2a9d4a' : '#1d3557';
-  $('start').disabled = running;
-  $('resume').disabled = running;
-  $('stop').disabled = !running;
-}
-
-async function refreshStatus() {
-  try {
-    const r = await chrome.runtime.sendMessage({ type: 'status' });
-    if (r && r.ok) {
-      $('total').textContent = `${r.total} 条`;
-      setRunning(r.running);
-      if (r.running && r.progress) {
-        const p = r.progress;
-        $('progress').textContent = `[${p.ki}/${p.kt} | R${p.p} | +${p.added}]`;
-      } else {
-        $('progress').textContent = '';
-      }
-    }
-  } catch (e) {}
-}
-
-async function refreshScored() {
-  const r = await chrome.runtime.sendMessage({ type: 'list_jobs' });
-  const list = $('scoredList');
-  list.innerHTML = '';
-  if (!r || !r.ok || !r.items || r.items.length === 0) {
-    list.innerHTML = '<div style="padding:8px;color:#999">(数据池为空)</div>';
-    $('scoreSummary').textContent = '';
-    return;
-  }
-  const counts = { S: 0, A: 0, B: 0, C: 0, Reject: 0, none: 0 };
-  for (const item of r.items) {
-    const prio = item.score_priority || 'none';
-    counts[prio] = (counts[prio] || 0) + 1;
-    const row = document.createElement('div');
-    row.className = 'scored-row';
-    const badge = document.createElement('span');
-    badge.className = 'score-badge sb-' + prio;
-    badge.textContent = prio === 'none' ? '--' :
-      prio === 'Reject' ? 'X' :
-      `${prio}${item.score ? ' ' + item.score : ''}`;
-    const title = document.createElement('span');
-    title.className = 'title';
-    title.textContent = `${item.job_name} — ${item.company_name}`;
-    title.title = `${item.job_name}\n${item.company_name}\n${(item.score_reason || '')}`;
-    if (item.job_url) {
-      title.style.cursor = 'pointer';
-      title.style.textDecoration = 'underline dotted';
-      title.addEventListener('click', () => {
-        chrome.tabs.create({ url: item.job_url });
-      });
-    }
-    const salary = document.createElement('span');
-    salary.className = 'salary';
-    salary.textContent = item.salary || '';
-    row.appendChild(badge);
-    row.appendChild(title);
-    row.appendChild(salary);
-    list.appendChild(row);
-  }
-  const summaryParts = [];
-  if (counts.S) summaryParts.push(`S=${counts.S}`);
-  if (counts.A) summaryParts.push(`A=${counts.A}`);
-  if (counts.B) summaryParts.push(`B=${counts.B}`);
-  if (counts.C) summaryParts.push(`C=${counts.C}`);
-  if (counts.Reject) summaryParts.push(`R=${counts.Reject}`);
-  if (counts.none) summaryParts.push(`未打分=${counts.none}`);
-  $('scoreSummary').textContent = `共 ${r.items.length} 条 · ` + summaryParts.join(' / ');
-}
-
-async function doStart(resume) {
-  const pc = (await chrome.storage.local.get('pendingConfig')).pendingConfig;
-  if (!pc || !pc.tasks || pc.tasks.length === 0) {
-    if (!resume) {
-      alert('请先在"配置"标签生成任务队列');
-      return;
-    }
-  }
-  const cfg = { ...(pc || {}), resume };
-  const r = await chrome.runtime.sendMessage({ type: 'start', config: cfg });
-  if (!r.ok) appendLog(`✗ ${r.error}`);
-  else setRunning(true);
-}
-
-// ============================================================
-// 个人画像 + API key
-// ============================================================
-function linesToArray(text) {
-  return text.split('\n').map((s) => s.trim()).filter(Boolean);
-}
-function arrayToLines(arr) {
-  return (arr || []).join('\n');
-}
-
 async function loadProfileIntoUI() {
   const r = await chrome.runtime.sendMessage({ type: 'get_profile' });
   const p = (r && r.ok) ? r.profile : {};
@@ -535,19 +163,48 @@ async function loadProfileIntoUI() {
   $('pfResume').value = p.resume_md || '';
   $('pfMonthlyMin').value = p.target_monthly_min || 30000;
   $('pfMonthlyIdeal').value = p.target_monthly_ideal || 40000;
-  $('pfSTier').value = arrayToLines(p.s_tier_roles);
-  $('pfATier').value = arrayToLines(p.a_tier_roles);
-  $('pfHardReject').value = arrayToLines(p.hard_reject);
+  $('pfSTier').value = (p.s_tier_roles || []).join('\n');
+  $('pfATier').value = (p.a_tier_roles || []).join('\n');
+  $('pfHardReject').value = (p.hard_reject || []).join('\n');
 
   const ar = await chrome.runtime.sendMessage({ type: 'get_api' });
   const a = (ar && ar.ok) ? ar.api : {};
   $('apiDeepseek').value = a.deepseek_key || '';
   $('apiWxToken').value = a.wxpusher_token || '';
   $('apiWxUid').value = a.wxpusher_uid || '';
+
+  renderChecklist(p, a);
 }
 
-async function saveProfileFromUI() {
-  const profile = {
+function renderChecklist(p, a) {
+  const items = [
+    { label: 'summary', ok: !!p.summary },
+    { label: '完整简历', ok: !!p.resume_md && p.resume_md.length > 100 },
+    { label: '目标月薪', ok: !!(p.target_monthly_min && p.target_monthly_ideal) },
+    { label: 'S 级关键词', ok: (p.s_tier_roles || []).length > 0 },
+    { label: 'A 级关键词', ok: (p.a_tier_roles || []).length > 0 },
+    { label: '硬拒关键词', ok: (p.hard_reject || []).length > 0 },
+    { label: 'DeepSeek API key', ok: !!a.deepseek_key },
+    { label: 'WxPusher Token', ok: !!a.wxpusher_token },
+    { label: 'WxPusher UID', ok: !!a.wxpusher_uid },
+  ];
+  const done = items.filter((x) => x.ok).length;
+  $('completionChecklist').innerHTML = items.map((x) => `
+    <div class="checklist-item ${x.ok ? 'done' : 'todo'}">
+      <span>${x.ok ? '✓' : '○'} ${x.label}</span>
+      <span class="status">${x.ok ? '已填' : '缺'}</span>
+    </div>
+  `).join('') + `
+    <div class="checklist-item" style="border-top:1px solid #e5e7eb;margin-top:4px;padding-top:6px;font-weight:600">
+      <span>总完成度</span>
+      <span class="status" style="color:${done === items.length ? '#2a9d4a' : '#c33'}">${done}/${items.length}</span>
+    </div>
+  `;
+}
+
+function profileFromUI() {
+  const linesToArray = (t) => t.split('\n').map((s) => s.trim()).filter(Boolean);
+  return {
     summary: $('pfSummary').value.trim(),
     resume_md: $('pfResume').value,
     target_monthly_min: parseInt($('pfMonthlyMin').value) || 30000,
@@ -556,56 +213,503 @@ async function saveProfileFromUI() {
     a_tier_roles: linesToArray($('pfATier').value),
     hard_reject: linesToArray($('pfHardReject').value),
   };
-  const api = {
+}
+function apiFromUI() {
+  return {
     deepseek_key: $('apiDeepseek').value.trim(),
     wxpusher_token: $('apiWxToken').value.trim(),
     wxpusher_uid: $('apiWxUid').value.trim(),
   };
-  await chrome.runtime.sendMessage({ type: 'save_profile', profile });
+}
+async function saveProfileFromUI() {
+  await chrome.runtime.sendMessage({ type: 'save_profile', profile: profileFromUI() });
+  await chrome.runtime.sendMessage({ type: 'save_api', api: apiFromUI() });
+  appendLog('✓ 画像 + API key 已保存');
+  await refreshAll();
+}
+
+// ─────────────────────── YAML 导入 ───────────────────────
+function parseSimpleYaml(text) {
+  // 仅支持 candidate.* 这种简单结构 + 顶层 key
+  // 支持: key: value, key: |\n  multiline, key:\n  - item, # 注释
+  const lines = text.split(/\r?\n/);
+  const out = {};
+  let i = 0;
+  function readBlockScalar(indent) {
+    const buf = [];
+    while (i < lines.length) {
+      const ln = lines[i];
+      if (ln.trim() === '' || /^\s*#/.test(ln)) { i++; continue; }
+      const m = ln.match(/^(\s*)(.*)$/);
+      if (!m || m[1].length < indent) break;
+      buf.push(ln.slice(indent));
+      i++;
+    }
+    return buf.join('\n');
+  }
+  function readArray(indent) {
+    const arr = [];
+    while (i < lines.length) {
+      const ln = lines[i];
+      if (ln.trim() === '' || /^\s*#/.test(ln)) { i++; continue; }
+      const m = ln.match(/^(\s*)-\s*(.*)$/);
+      if (!m || m[1].length < indent) break;
+      arr.push(m[2].trim().replace(/^["']|["']$/g, ''));
+      i++;
+    }
+    return arr;
+  }
+  function readObject(indent) {
+    const obj = {};
+    while (i < lines.length) {
+      const ln = lines[i];
+      if (ln.trim() === '' || /^\s*#/.test(ln)) { i++; continue; }
+      const m = ln.match(/^(\s*)([\w\-]+):\s*(.*)$/);
+      if (!m || m[1].length < indent) break;
+      if (m[1].length > indent) { i++; continue; }
+      const key = m[2];
+      let val = m[3];
+      i++;
+      if (val === '|' || val === '>') {
+        // block scalar
+        // find indent of next non-empty
+        let childIndent = indent + 2;
+        while (i < lines.length && lines[i].trim() === '') i++;
+        if (i < lines.length) {
+          const cm = lines[i].match(/^(\s*)/);
+          if (cm) childIndent = cm[1].length;
+        }
+        obj[key] = readBlockScalar(childIndent);
+      } else if (val === '') {
+        // could be nested obj or array
+        let childIndent = indent + 2;
+        while (i < lines.length && (lines[i].trim() === '' || /^\s*#/.test(lines[i]))) i++;
+        if (i < lines.length) {
+          const cm = lines[i].match(/^(\s*)/);
+          if (cm) childIndent = cm[1].length;
+        }
+        if (i < lines.length && /^\s*-\s/.test(lines[i])) {
+          obj[key] = readArray(childIndent);
+        } else {
+          obj[key] = readObject(childIndent);
+        }
+      } else {
+        // inline scalar
+        let v = val.trim();
+        if (/^-?\d+(\.\d+)?$/.test(v)) v = parseFloat(v);
+        else v = v.replace(/^["']|["']$/g, '');
+        obj[key] = v;
+      }
+    }
+    return obj;
+  }
+  return readObject(0);
+}
+
+$('importYaml').addEventListener('click', () => $('yamlFile').click());
+$('yamlFile').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try {
+    const text = await f.text();
+    const parsed = parseSimpleYaml(text);
+    const cand = parsed.candidate || parsed;
+    if (cand.summary) $('pfSummary').value = String(cand.summary).trim();
+    if (cand.target_monthly_min) $('pfMonthlyMin').value = parseInt(cand.target_monthly_min);
+    if (cand.target_monthly_ideal) $('pfMonthlyIdeal').value = parseInt(cand.target_monthly_ideal);
+    if (Array.isArray(cand.s_tier_roles)) $('pfSTier').value = cand.s_tier_roles.join('\n');
+    if (Array.isArray(cand.a_tier_roles)) $('pfATier').value = cand.a_tier_roles.join('\n');
+    if (Array.isArray(cand.hard_reject)) $('pfHardReject').value = cand.hard_reject.join('\n');
+    appendLog(`✓ 已从 ${f.name} 导入,记得点保存`);
+    alert(`已读 ${f.name} 的字段,确认后点「保存」`);
+  } catch (err) {
+    alert('解析失败:' + err.message);
+  }
+  e.target.value = '';
+});
+$('importResume').addEventListener('click', () => $('resumeFile').click());
+$('resumeFile').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const text = await f.text();
+  $('pfResume').value = text;
+  appendLog(`✓ 已从 ${f.name} 导入简历,记得点保存`);
+  e.target.value = '';
+});
+
+$('saveProfile').addEventListener('click', saveProfileFromUI);
+$('testPush').addEventListener('click', async () => {
+  const api = apiFromUI();
+  if (!api.wxpusher_token || !api.wxpusher_uid) {
+    alert('请先填 WxPusher token + uid'); return;
+  }
+  // 先保存一次,确保 background 拿到最新值
   await chrome.runtime.sendMessage({ type: 'save_api', api });
-  appendLog('✓ 个人画像 + API key 已保存');
-  alert('已保存');
-}
-
-// ============================================================
-// 启动
-// ============================================================
-async function init() {
-  await loadDict();
-  renderPositionTree();
-  renderCityGrid();
-  fillFilters();
-  await refreshStatus();
-}
-init();
-
-// 接收 background 主动推的 progress 消息
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.type === 'progress') {
-    appendLog(msg.msg);
-  } else if (msg.type === 'score_progress') {
-    $('progress').textContent = `打分中 ${msg.done}/${msg.total}`;
-  } else if (msg.type === 'done') {
-    setRunning(false);
-    refreshStatus();
-    refreshScored();
+  const today = new Date().toISOString().slice(0, 10);
+  const md = `## ✅ Boss 雷达 — 推送测试 ${today}\n\n收到这条说明 WxPusher 配通了。`;
+  try {
+    const resp = await fetch('https://wxpusher.zjiecode.com/api/send/message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        appToken: api.wxpusher_token,
+        content: md, contentType: 3,
+        summary: '测试推送',
+        uids: [api.wxpusher_uid],
+      }),
+    });
+    const data = await resp.json();
+    if (data.success) { appendLog('✓ 测试推送成功'); alert('成功,微信看看'); }
+    else { appendLog(`✗ ${JSON.stringify(data)}`); alert(`失败: ${data.msg || JSON.stringify(data)}`); }
+  } catch (e) {
+    alert('网络错误: ' + e.message);
   }
 });
 
-setInterval(refreshStatus, 2000);
+// ============================================================
+// 搜索:keywords chips + position tree + cities + filters + 预设
+// ============================================================
+function renderKeywordChips() {
+  const wrap = $('keywordChips');
+  // 移除现有 chip 节点(保留 input)
+  wrap.querySelectorAll('.chip').forEach((c) => c.remove());
+  // 插入 chip
+  for (let i = keywords.length - 1; i >= 0; i--) {
+    const kw = keywords[i];
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.innerHTML = `${kw}<span class="x" data-i="${i}">×</span>`;
+    chip.querySelector('.x').addEventListener('click', () => {
+      keywords.splice(i, 1);
+      renderKeywordChips();
+      updateSelCounts();
+    });
+    wrap.insertBefore(chip, $('keywordInput'));
+  }
+}
+$('keywordInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const v = e.target.value.trim();
+    if (v && !keywords.includes(v)) {
+      keywords.push(v);
+      renderKeywordChips();
+      updateSelCounts();
+    }
+    e.target.value = '';
+  } else if (e.key === 'Backspace' && e.target.value === '' && keywords.length > 0) {
+    keywords.pop();
+    renderKeywordChips();
+    updateSelCounts();
+  }
+});
 
-// ============================================================
-// 按钮事件
-// ============================================================
+function renderPositionTree(filter = '') {
+  const root = $('positionTree');
+  root.innerHTML = '';
+  const flo = filter.toLowerCase();
+  for (const l1 of DICT.positions) {
+    const l1Wrap = document.createElement('div');
+    const l1Header = document.createElement('div');
+    l1Header.className = 'tree-l1';
+    const arrow1 = Object.assign(document.createElement('span'), { className: 'toggle-arrow', textContent: '▶' });
+    const cb1 = Object.assign(document.createElement('input'), { type: 'checkbox' });
+    cb1.dataset.role = 'l1';
+    const lbl1 = Object.assign(document.createElement('span'), { textContent: l1.name });
+    const cnt1 = Object.assign(document.createElement('span'), { className: 'count' });
+    let l3Total = 0;
+    for (const l2 of l1.children) l3Total += l2.children.length;
+    cnt1.textContent = `${l3Total} 个`;
+    l1Header.append(arrow1, cb1, lbl1, cnt1);
+
+    const l2Wrap = Object.assign(document.createElement('div'), { className: 'tree-l2-wrap' });
+    let l1HasMatch = false;
+    for (const l2 of l1.children) {
+      const l2NodeWrap = document.createElement('div');
+      const l2Header = document.createElement('div');
+      l2Header.className = 'tree-l2';
+      const arrow2 = Object.assign(document.createElement('span'), { className: 'toggle-arrow', textContent: '▶' });
+      const cb2 = Object.assign(document.createElement('input'), { type: 'checkbox' });
+      cb2.dataset.role = 'l2';
+      const lbl2 = Object.assign(document.createElement('span'), { textContent: `${l2.name} (${l2.children.length})` });
+      l2Header.append(arrow2, cb2, lbl2);
+
+      const l3Wrap = Object.assign(document.createElement('div'), { className: 'tree-l3-wrap' });
+      let l2HasMatch = false;
+      for (const l3 of l2.children) {
+        if (flo && l3.name.toLowerCase().indexOf(flo) === -1) continue;
+        l2HasMatch = true;
+        const l3Node = document.createElement('div'); l3Node.className = 'tree-l3';
+        const cb3 = Object.assign(document.createElement('input'), { type: 'checkbox' });
+        cb3.dataset.role = 'l3';
+        cb3.dataset.code = l3.code;
+        cb3.checked = sel.positions.has(l3.code);
+        cb3.addEventListener('change', () => {
+          if (cb3.checked) sel.positions.add(l3.code);
+          else sel.positions.delete(l3.code);
+          updateSelCounts(); syncParentChecks();
+        });
+        const lab = document.createElement('label');
+        lab.append(cb3, document.createTextNode(' ' + l3.name));
+        l3Node.append(lab);
+        l3Wrap.append(l3Node);
+      }
+      if (l2HasMatch) {
+        l2Header.addEventListener('click', (e) => {
+          if (e.target.tagName === 'INPUT') return;
+          arrow2.classList.toggle('open'); l3Wrap.classList.toggle('open');
+        });
+        cb2.addEventListener('change', () => {
+          l3Wrap.querySelectorAll('input[data-role="l3"]').forEach((cb) => {
+            cb.checked = cb2.checked;
+            if (cb2.checked) sel.positions.add(cb.dataset.code);
+            else sel.positions.delete(cb.dataset.code);
+          });
+          updateSelCounts(); syncParentChecks();
+        });
+        l2NodeWrap.append(l2Header, l3Wrap);
+        l2Wrap.append(l2NodeWrap);
+        if (flo) { arrow2.classList.add('open'); l3Wrap.classList.add('open'); }
+        l1HasMatch = true;
+      }
+    }
+    if (l1HasMatch) {
+      l1Header.addEventListener('click', (e) => {
+        if (e.target.tagName === 'INPUT') return;
+        arrow1.classList.toggle('open'); l2Wrap.classList.toggle('open');
+      });
+      cb1.addEventListener('change', () => {
+        l2Wrap.querySelectorAll('input[data-role="l3"]').forEach((cb) => {
+          cb.checked = cb1.checked;
+          if (cb1.checked) sel.positions.add(cb.dataset.code);
+          else sel.positions.delete(cb.dataset.code);
+        });
+        l2Wrap.querySelectorAll('input[data-role="l2"]').forEach((cb) => cb.checked = cb1.checked);
+        updateSelCounts();
+      });
+      l1Wrap.append(l1Header, l2Wrap);
+      root.append(l1Wrap);
+      if (flo) { arrow1.classList.add('open'); l2Wrap.classList.add('open'); }
+    }
+  }
+  syncParentChecks();
+}
+function syncParentChecks() {
+  document.querySelectorAll('input[data-role="l2"]').forEach((cb) => {
+    const wrap = cb.closest('.tree-l2').parentElement.querySelector('.tree-l3-wrap');
+    if (!wrap) return;
+    const l3s = wrap.querySelectorAll('input[data-role="l3"]');
+    const total = l3s.length;
+    let n = 0; l3s.forEach((c) => { if (c.checked) n++; });
+    cb.checked = total > 0 && n === total;
+    cb.indeterminate = n > 0 && n < total;
+  });
+  document.querySelectorAll('input[data-role="l1"]').forEach((cb) => {
+    const wrap = cb.closest('.tree-l1').parentElement.querySelector('.tree-l2-wrap');
+    if (!wrap) return;
+    const l3s = wrap.querySelectorAll('input[data-role="l3"]');
+    const total = l3s.length;
+    let n = 0; l3s.forEach((c) => { if (c.checked) n++; });
+    cb.checked = total > 0 && n === total;
+    cb.indeterminate = n > 0 && n < total;
+  });
+}
+
+function renderCityGrid(filter = '') {
+  const root = $('cityGrid'); root.innerHTML = '';
+  const all = [];
+  for (const c of DICT.cities.hot) all.push(c);
+  for (const g of DICT.cities.byLetter) for (const c of g.cities) all.push(c);
+  const seen = new Set();
+  const uniq = [];
+  for (const c of all) { if (seen.has(c.code)) continue; seen.add(c.code); uniq.push(c); }
+  for (const c of uniq) {
+    if (filter && c.name.indexOf(filter) === -1) continue;
+    const lbl = document.createElement('label');
+    const cb = Object.assign(document.createElement('input'), { type: 'checkbox' });
+    cb.dataset.code = c.code;
+    cb.dataset.name = c.name;
+    cb.checked = sel.cities.has(c.code);
+    cb.addEventListener('change', () => {
+      if (cb.checked) sel.cities.add(c.code); else sel.cities.delete(c.code);
+      updateSelCounts();
+    });
+    lbl.append(cb, document.createTextNode(' ' + c.name));
+    root.append(lbl);
+  }
+}
+
+function fillFilters() {
+  const fill = (el, items, defaultCode) => {
+    for (const x of items) {
+      if (x.code === 0) continue;
+      const opt = document.createElement('option');
+      opt.value = x.code; opt.textContent = x.name;
+      if (defaultCode && x.code === defaultCode) opt.selected = true;
+      el.appendChild(opt);
+    }
+  };
+  fill($('filterExp'), DICT.filters.experiences);
+  fill($('filterDeg'), DICT.filters.degrees);
+  fill($('filterSalary'), DICT.filters.salaries);
+}
+
+function updateSelCounts() {
+  $('selPosCount').textContent = sel.positions.size;
+  $('selCityCount').textContent = sel.cities.size;
+  const combo = (sel.positions.size + keywords.length) * sel.cities.size;
+  $('comboCount').textContent = combo;
+  const m = combo * 4;
+  $('comboEst').textContent = combo > 0
+    ? `· 预计 ${m < 60 ? m + ' 分钟' : (m / 60).toFixed(1) + ' 小时'}`
+    : '';
+}
+
+// ─────────────────────── 预设 ───────────────────────
+async function refreshPresetDropdown() {
+  const r = await chrome.runtime.sendMessage({ type: 'list_presets' });
+  const presets = (r && r.ok) ? r.presets : {};
+  const dd = $('presetSelect');
+  // 清空保留第一项
+  while (dd.options.length > 1) dd.remove(1);
+  for (const name of Object.keys(presets)) {
+    const opt = document.createElement('option');
+    opt.value = name; opt.textContent = name;
+    dd.appendChild(opt);
+  }
+}
+function snapshotConfig() {
+  return {
+    keywords: [...keywords],
+    positions: [...sel.positions],
+    cities: [...sel.cities],
+    filterExp: $('filterExp').value,
+    filterDeg: $('filterDeg').value,
+    filterSalary: $('filterSalary').value,
+    filterDate: $('filterDate').value,
+    filterCompany: $('filterCompany').value,
+    sortMode: $('sortMode').value,
+    runMode: $('runMode').value,
+    maxScrolls: parseInt($('maxScrolls').value) || 15,
+    maxTotal: parseInt($('maxTotal').value) || 0,
+    dwellMin: parseFloat($('dwellMin').value) || 2,
+    dwellMax: parseFloat($('dwellMax').value) || 5,
+    gapMin: parseFloat($('gapMin').value) || 10,
+    gapMax: parseFloat($('gapMax').value) || 25,
+  };
+}
+function applySnapshot(s) {
+  keywords = Array.isArray(s.keywords) ? s.keywords : [];
+  sel.positions.clear(); (s.positions || []).forEach((p) => sel.positions.add(p));
+  sel.cities.clear(); (s.cities || []).forEach((c) => sel.cities.add(c));
+  $('filterExp').value = s.filterExp || '';
+  $('filterDeg').value = s.filterDeg || '';
+  $('filterSalary').value = s.filterSalary || '';
+  $('filterDate').value = s.filterDate || '';
+  $('filterCompany').value = s.filterCompany || '';
+  $('sortMode').value = s.sortMode || 'newest';
+  $('runMode').value = s.runMode || 'window_isolated';
+  $('maxScrolls').value = s.maxScrolls || 15;
+  $('maxTotal').value = s.maxTotal || 0;
+  $('dwellMin').value = s.dwellMin || 2;
+  $('dwellMax').value = s.dwellMax || 5;
+  $('gapMin').value = s.gapMin || 10;
+  $('gapMax').value = s.gapMax || 25;
+  renderKeywordChips();
+  renderPositionTree($('qfPos').value);
+  renderCityGrid($('qfCity').value);
+  updateSelCounts();
+}
+
+$('savePreset').addEventListener('click', async () => {
+  const name = $('presetName').value.trim();
+  if (!name) { alert('给配置起个名字'); return; }
+  await chrome.runtime.sendMessage({ type: 'save_preset', name, config: snapshotConfig() });
+  appendLog(`✓ 已保存预设「${name}」`);
+  await refreshPresetDropdown();
+  $('presetName').value = '';
+});
+$('loadPreset').addEventListener('click', async () => {
+  const name = $('presetSelect').value;
+  if (!name) { alert('选一个预设'); return; }
+  const r = await chrome.runtime.sendMessage({ type: 'load_preset', name });
+  if (r.ok) { applySnapshot(r.config); appendLog(`✓ 已载入「${name}」`); }
+  else alert(r.error);
+});
+$('deletePreset').addEventListener('click', async () => {
+  const name = $('presetSelect').value;
+  if (!name) { alert('选一个预设再删'); return; }
+  if (!confirm(`删除预设「${name}」?`)) return;
+  await chrome.runtime.sendMessage({ type: 'delete_preset', name });
+  await refreshPresetDropdown();
+});
+
+// ─────────────────────── 生成队列 ───────────────────────
+async function buildTasksAndSave() {
+  if (sel.positions.size === 0 && keywords.length === 0) {
+    alert('请至少选 1 个职位 或 加 1 个关键词');
+    return;
+  }
+  if (sel.cities.size === 0) {
+    alert('请至少选 1 个城市');
+    return;
+  }
+  const posMap = new Map();
+  for (const l1 of DICT.positions) for (const l2 of l1.children) for (const l3 of l2.children) {
+    posMap.set(l3.code, l3.name);
+  }
+  const cityMap = new Map();
+  for (const c of DICT.cities.hot) cityMap.set(c.code, c.name);
+  for (const g of DICT.cities.byLetter) for (const c of g.cities) cityMap.set(c.code, c.name);
+
+  const filterExp = $('filterExp').value;
+  const filterDeg = $('filterDeg').value;
+  const filterSalary = $('filterSalary').value;
+  const filterDate = $('filterDate').value;
+
+  const tasks = [];
+  for (const p of sel.positions) {
+    for (const c of sel.cities) {
+      tasks.push({
+        positionCode: p, positionName: posMap.get(p) || String(p),
+        cityCode: c, cityName: cityMap.get(c) || String(c),
+        experience: filterExp, degree: filterDeg, salary: filterSalary, dateType: filterDate,
+      });
+    }
+  }
+  for (const q of keywords) {
+    for (const c of sel.cities) {
+      tasks.push({
+        query: q, positionName: `[关键词] ${q}`,
+        cityCode: c, cityName: cityMap.get(c) || String(c),
+        experience: filterExp, degree: filterDeg, salary: filterSalary, dateType: filterDate,
+      });
+    }
+  }
+  const pc = {
+    tasks,
+    sortMode: $('sortMode').value,
+    runMode: $('runMode').value,
+    maxScrolls: parseInt($('maxScrolls').value) || 15,
+    maxTotal: parseInt($('maxTotal').value) || 0,
+    dwellMin: parseFloat($('dwellMin').value) || 2,
+    dwellMax: parseFloat($('dwellMax').value) || 5,
+    gapMin: parseFloat($('gapMin').value) || 10,
+    gapMax: parseFloat($('gapMax').value) || 25,
+    companyFilter: $('filterCompany').value.trim(),
+  };
+  await chrome.storage.local.set({ pendingConfig: pc });
+  await chrome.runtime.sendMessage({ type: 'clear_queue' });
+  appendLog(`✓ 生成 ${tasks.length} 个任务,切到运行 tab`);
+  switchTab('run');
+}
+
 $('qfPos').addEventListener('input', (e) => renderPositionTree(e.target.value));
 $('qfCity').addEventListener('input', (e) => renderCityGrid(e.target.value));
-$('customQueries').addEventListener('input', updateSelCounts);
-
 $('clearPos').addEventListener('click', () => {
   sel.positions.clear();
   document.querySelectorAll('#positionTree input[type=checkbox]').forEach((cb) => {
-    cb.checked = false;
-    cb.indeterminate = false;
+    cb.checked = false; cb.indeterminate = false;
   });
   updateSelCounts();
 });
@@ -614,111 +718,288 @@ $('clearCity').addEventListener('click', () => {
   document.querySelectorAll('#cityGrid input[type=checkbox]').forEach((cb) => cb.checked = false);
   updateSelCounts();
 });
-
 $('genQueue').addEventListener('click', buildTasksAndSave);
 
-$('start').addEventListener('click', () => doStart(false));
-$('resume').addEventListener('click', () => doStart(true));
-$('stop').addEventListener('click', async () => {
+// ============================================================
+// 运行 tab — pipeline / 分步 / 池 / 结果列表
+// ============================================================
+function appendLog(msg) {
+  const t = new Date().toTimeString().slice(0, 8);
+  $('log').textContent += `[${t}] ${msg}\n`;
+  $('log').scrollTop = $('log').scrollHeight;
+}
+
+async function refreshPool() {
+  const r = await chrome.runtime.sendMessage({ type: 'status' });
+  if (r && r.ok) $('poolTotal').textContent = r.total;
+}
+
+async function refreshQueue() {
+  const r = await chrome.runtime.sendMessage({ type: 'get_queue' });
+  const list = $('queueMini');
+  let q = (r && r.ok) ? r.queue : null;
+  if (!q) {
+    const pc = (await chrome.storage.local.get('pendingConfig')).pendingConfig;
+    if (pc?.tasks?.length) q = { tasks: pc.tasks.map((t, i) => ({ ...t, status: 'pending' })) };
+  }
+  if (!q || !q.tasks || q.tasks.length === 0) {
+    list.innerHTML = '<div style="padding:8px;color:#9ca3af">(尚未生成队列)</div>';
+    return;
+  }
+  list.innerHTML = q.tasks.map((t) =>
+    `<div class="queue-row"><span>${t.positionName} @ ${t.cityName}${t.captured ? ` +${t.captured}` : ''}</span>` +
+    `<span class="queue-status qs-${t.status}">${t.status}</span></div>`
+  ).join('');
+}
+
+async function refreshScored() {
+  const r = await chrome.runtime.sendMessage({ type: 'list_jobs' });
+  const items = (r && r.ok && r.items) ? r.items : [];
+  const list = $('scoredList');
+
+  // 按 filter 过滤
+  const filtered = items.filter((it) => {
+    if (resultFilter === 'all') return it.marked !== 'not_interested';
+    if (resultFilter === 'S') return it.score_priority === 'S';
+    if (resultFilter === 'A') return it.score_priority === 'A';
+    if (resultFilter === 'B') return it.score_priority === 'B';
+    if (resultFilter === '未打分') return !it.score_priority;
+    if (resultFilter === '已投') return it.marked === 'applied';
+    return true;
+  });
+
+  if (filtered.length === 0) {
+    list.innerHTML = '<div style="padding:8px;color:#9ca3af">(无)</div>';
+    $('scoreSummary').textContent = '';
+    return;
+  }
+
+  list.innerHTML = '';
+  const counts = { S: 0, A: 0, B: 0, C: 0, Reject: 0, none: 0 };
+  for (const it of items) {
+    if (it.marked === 'not_interested') continue;
+    const p = it.score_priority || 'none';
+    counts[p] = (counts[p] || 0) + 1;
+  }
+  for (const it of filtered) {
+    const prio = it.score_priority || 'none';
+    const row = document.createElement('div');
+    row.className = 'scored-row' + (it.marked ? ' marked-' + it.marked : '');
+    const head = document.createElement('div');
+    head.className = 'head';
+    head.innerHTML = `
+      <span class="score-badge sb-${prio}">${prio === 'none' ? '—' : prio === 'Reject' ? '×' : prio + (it.score ? ' ' + it.score : '')}</span>
+      <span class="title">${escapeHtml(it.job_name || '')} <span style="color:#9ca3af">— ${escapeHtml(it.company_name || '')}</span></span>
+      <span class="meta">${escapeHtml(it.salary || '')}</span>
+    `;
+    head.addEventListener('click', () => row.classList.toggle('open'));
+    row.appendChild(head);
+
+    const exp = document.createElement('div');
+    exp.className = 'expand';
+    const reason = it.score_reason ? `<div class="reason">💡 ${escapeHtml(it.score_reason)}</div>` : '';
+    const concerns = (it.score_concerns && it.score_concerns.length)
+      ? `<div class="concerns">⚠️ ${it.score_concerns.map(escapeHtml).join(' / ')}</div>` : '';
+    const pitch = it.score_pitch ? `<div class="pitch">💬 ${escapeHtml(it.score_pitch)}</div>` : '';
+    const cityMeta = `<div style="color:#9ca3af;font-size:11px">📍 ${escapeHtml(it.city || '')} ${it.area ? '· ' + escapeHtml(it.area) : ''} ${it.experience ? '· ' + escapeHtml(it.experience) : ''}</div>`;
+    exp.innerHTML = reason + concerns + pitch + cityMeta;
+
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+    const openBtn = document.createElement('button');
+    openBtn.className = 'outline'; openBtn.textContent = '🔗 打开';
+    openBtn.addEventListener('click', (e) => { e.stopPropagation(); if (it.job_url) chrome.tabs.create({ url: it.job_url }); });
+    const applyBtn = document.createElement('button');
+    applyBtn.className = it.marked === 'applied' ? 'green' : 'outline';
+    applyBtn.textContent = it.marked === 'applied' ? '✓ 已投' : '标记已投';
+    applyBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await chrome.runtime.sendMessage({ type: 'mark_job', job_id: it.job_id, mark: it.marked === 'applied' ? null : 'applied' });
+      refreshScored();
+    });
+    const skipBtn = document.createElement('button');
+    skipBtn.className = 'red';
+    skipBtn.textContent = '🚫 屏蔽公司';
+    skipBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm(`屏蔽「${it.company_name}」的全部岗位?`)) return;
+      await chrome.runtime.sendMessage({ type: 'mark_job', job_id: it.job_id, mark: 'not_interested', block_company: true });
+      refreshScored();
+    });
+    if (it.score_pitch) {
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'outline';
+      copyBtn.textContent = '📋 复制话术';
+      copyBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await navigator.clipboard.writeText(it.score_pitch);
+        copyBtn.textContent = '✓ 已复制';
+        setTimeout(() => { copyBtn.textContent = '📋 复制话术'; }, 1500);
+      });
+      actions.appendChild(copyBtn);
+    }
+    actions.append(openBtn, applyBtn, skipBtn);
+    exp.appendChild(actions);
+    row.appendChild(exp);
+    list.appendChild(row);
+  }
+  const sum = [];
+  if (counts.S) sum.push(`S=${counts.S}`);
+  if (counts.A) sum.push(`A=${counts.A}`);
+  if (counts.B) sum.push(`B=${counts.B}`);
+  if (counts.C) sum.push(`C=${counts.C}`);
+  if (counts.Reject) sum.push(`R=${counts.Reject}`);
+  if (counts.none) sum.push(`未打分=${counts.none}`);
+  $('scoreSummary').textContent = `池中 ${items.length} 条(已屏蔽不计) · ${sum.join(' / ')}`;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// 结果过滤 chips
+document.querySelectorAll('#resultFilters .fchip').forEach((c) => {
+  c.addEventListener('click', () => {
+    document.querySelectorAll('#resultFilters .fchip').forEach((x) => x.classList.remove('active'));
+    c.classList.add('active');
+    resultFilter = c.dataset.filter;
+    refreshScored();
+  });
+});
+
+// ─────────────────────── Pipeline 按钮 ───────────────────────
+$('runPipeline').addEventListener('click', async () => {
+  const pc = (await chrome.storage.local.get('pendingConfig')).pendingConfig;
+  if (!pc?.tasks?.length) {
+    if (!confirm('当前没有待跑队列。继续会跳过采集,直接打分 + 推送数据池里已有的(可能空)。继续?')) return;
+  }
+  appendLog('🚀 一键流水线启动');
+  const r = await chrome.runtime.sendMessage({ type: 'run_pipeline', config: pc || null });
+  if (!r.ok) appendLog(`✗ ${r.error}`);
+});
+$('stopPipeline').addEventListener('click', async () => {
   await chrome.runtime.sendMessage({ type: 'stop' });
+  await chrome.runtime.sendMessage({ type: 'stop_pipeline' });
   appendLog('■ 停止信号已发送');
 });
 
+// 分步按钮
+$('startCrawl').addEventListener('click', async () => {
+  const pc = (await chrome.storage.local.get('pendingConfig')).pendingConfig;
+  if (!pc?.tasks?.length) { alert('先在「搜索」tab 生成队列'); return; }
+  const r = await chrome.runtime.sendMessage({ type: 'start', config: { ...pc, resume: false } });
+  if (!r.ok) appendLog(`✗ ${r.error}`);
+});
+$('resumeCrawl').addEventListener('click', async () => {
+  const pc = (await chrome.storage.local.get('pendingConfig')).pendingConfig;
+  const r = await chrome.runtime.sendMessage({ type: 'start', config: { ...(pc || {}), resume: true } });
+  if (!r.ok) appendLog(`✗ ${r.error}`);
+});
+$('stopCrawl').addEventListener('click', async () => {
+  await chrome.runtime.sendMessage({ type: 'stop' });
+  appendLog('■ 停止信号已发送');
+});
 $('scoreAll').addEventListener('click', async () => {
-  appendLog('▶ 开始 AI 打分...');
-  $('scoreAll').disabled = true;
+  appendLog('▶ 开始打分...');
   const r = await chrome.runtime.sendMessage({ type: 'score_all' });
-  $('scoreAll').disabled = false;
-  if (r.ok) {
-    appendLog(`✓ 打分完成: 新增 ${r.scored} 条 (跳过 ${r.skipped} 条已打分)`);
-    refreshScored();
-  } else {
-    appendLog(`✗ ${r.error}`);
-  }
-});
-
-$('pushNow').addEventListener('click', async () => {
-  appendLog('▶ 准备推送 WxPusher...');
-  $('pushNow').disabled = true;
-  const r = await chrome.runtime.sendMessage({ type: 'push_now' });
-  $('pushNow').disabled = false;
-  if (r.ok) {
-    appendLog(`✓ 推送成功: ${r.total} 条 (S=${r.counts.S} A=${r.counts.A} B=${r.counts.B})`);
-  } else {
-    appendLog(`✗ ${r.error}`);
-  }
-});
-
-$('export').addEventListener('click', async () => {
-  const r = await chrome.runtime.sendMessage({ type: 'export' });
-  if (r.ok) appendLog(`✓ 已导出 ${r.count} 条`);
+  if (r.ok) { appendLog(`✓ 打分: 新增 ${r.scored} 跳过 ${r.skipped}`); refreshScored(); }
   else appendLog(`✗ ${r.error}`);
 });
-
+$('pushNow').addEventListener('click', async () => {
+  appendLog('▶ 准备推送...');
+  const r = await chrome.runtime.sendMessage({ type: 'push_now' });
+  if (r.ok) appendLog(`✓ 推送: ${r.total} 条 (S=${r.counts.S} A=${r.counts.A} B=${r.counts.B})`);
+  else appendLog(`✗ ${r.error}`);
+});
 $('exportJobRadar').addEventListener('click', async () => {
   const r = await chrome.runtime.sendMessage({ type: 'export_jobradar' });
-  if (r.ok) appendLog(`✓ 已导出 job-radar JSON: ${r.count} 条 → ${r.filename}`);
+  if (r.ok) appendLog(`✓ 导出 ${r.count} 条 → ${r.filename}`);
   else appendLog(`✗ ${r.error}`);
 });
-
-$('clear').addEventListener('click', async () => {
-  if (!confirm('清空数据池?')) return;
+$('exportCsv').addEventListener('click', async () => {
+  const r = await chrome.runtime.sendMessage({ type: 'export' });
+  if (r.ok) appendLog(`✓ 导出 ${r.count} 条`);
+  else appendLog(`✗ ${r.error}`);
+});
+$('clearPool').addEventListener('click', async () => {
+  if (!confirm('清空数据池?所有未投递的岗位会丢')) return;
   await chrome.runtime.sendMessage({ type: 'clear' });
   appendLog('✓ 数据池已清空');
-  refreshStatus();
-  refreshScored();
+  refreshAll();
 });
 
-$('clearQueue').addEventListener('click', async () => {
-  if (!confirm('清空任务队列?')) return;
-  await chrome.runtime.sendMessage({ type: 'clear_queue' });
-  await chrome.storage.local.remove('pendingConfig');
-  refreshQueue();
-});
-
-$('exportQueueState').addEventListener('click', async () => {
-  const r = await chrome.runtime.sendMessage({ type: 'get_queue' });
-  if (!r.ok || !r.queue) { appendLog('队列为空'); return; }
-  const blob = new Blob([JSON.stringify(r.queue, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `boss_queue_${Date.now()}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-});
-
-$('saveProfile').addEventListener('click', saveProfileFromUI);
-$('testPush').addEventListener('click', async () => {
-  // 临时保存最新值后调用推送测试
-  await saveProfileFromUI();
-  const ar = await chrome.runtime.sendMessage({ type: 'get_api' });
-  const a = (ar && ar.ok) ? ar.api : {};
-  if (!a.wxpusher_token || !a.wxpusher_uid) {
-    alert('请先填 WxPusher token + uid'); return;
+// ============================================================
+// 历史 tab
+// ============================================================
+async function refreshHistory() {
+  const r = await chrome.runtime.sendMessage({ type: 'list_history' });
+  const items = (r && r.ok) ? r.history : [];
+  const list = $('historyList');
+  if (items.length === 0) {
+    list.textContent = '(暂无)'; list.className = 'muted';
+    return;
   }
-  // 简单测试推送
-  const today = new Date().toISOString().slice(0, 10);
-  const md = `## ✅ Boss 雷达 — 推送测试 ${today}\n\n这条来自扩展,如果你收到了说明 WxPusher 配通了。`;
-  // 用 push_now 走的是已打分逻辑;这里需要专门的 test push,简化:
-  // 临时塞一条假已打分 → 调 push_now 会失败 ("没有已打分"),所以直接走 fetch
-  const resp = await fetch('https://wxpusher.zjiecode.com/api/send/message', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      appToken: a.wxpusher_token,
-      content: md,
-      contentType: 3,
-      summary: '测试推送',
-      uids: [a.wxpusher_uid],
-    }),
+  list.className = '';
+  list.innerHTML = items.slice().reverse().map((h) => `
+    <div class="history-row">
+      <span class="history-date">${h.date}</span>
+      <span class="history-stats">推送 ${h.pushed_total} · S=${h.S} A=${h.A} B=${h.B}</span>
+    </div>
+  `).join('');
+}
+
+async function refreshBlocked() {
+  const r = await chrome.runtime.sendMessage({ type: 'list_blocked' });
+  const items = (r && r.ok) ? r.blocked : [];
+  const list = $('blockedList');
+  if (items.length === 0) {
+    list.textContent = '(无)'; list.className = 'muted';
+    return;
+  }
+  list.className = '';
+  list.innerHTML = items.map((b) => `
+    <div class="history-row">
+      <span>${escapeHtml(b.company_name)}</span>
+      <button class="outline small" data-cid="${escapeHtml(b.company_id)}">取消屏蔽</button>
+    </div>
+  `).join('');
+  list.querySelectorAll('button[data-cid]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      await chrome.runtime.sendMessage({ type: 'unblock_company', company_id: btn.dataset.cid });
+      refreshBlocked();
+      refreshScored();
+    });
   });
-  const data = await resp.json();
-  if (data.success) {
-    appendLog('✓ 测试推送成功');
-    alert('测试推送成功,微信看看');
-  } else {
-    appendLog(`✗ 测试推送失败: ${JSON.stringify(data)}`);
-    alert(`失败: ${JSON.stringify(data)}`);
+}
+
+$('rescoreAll').addEventListener('click', async () => {
+  if (!confirm('清空全部打分结果,重新打分?')) return;
+  await chrome.runtime.sendMessage({ type: 'clear_scores' });
+  const r = await chrome.runtime.sendMessage({ type: 'score_all' });
+  if (r.ok) { appendLog(`✓ 重打分: ${r.scored} 条`); refreshScored(); }
+  else appendLog(`✗ ${r.error}`);
+});
+$('clearHistory').addEventListener('click', async () => {
+  if (!confirm('清空历史日报?')) return;
+  await chrome.runtime.sendMessage({ type: 'clear_history' });
+  refreshHistory();
+});
+
+// ============================================================
+// background 推送的消息
+// ============================================================
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === 'progress') appendLog(msg.msg);
+  else if (msg.type === 'score_progress') $('progress').textContent = `打分中 ${msg.done}/${msg.total}`;
+  else if (msg.type === 'pipeline_progress') {
+    if (msg.stage) appendLog(`▶ ${msg.stage}`);
+    refreshPipelineState();
+  } else if (msg.type === 'done') {
+    refreshAll();
   }
 });
+
+function bindEvents() {
+  // no-op,事件已挂在 init 之外
+}
+init();

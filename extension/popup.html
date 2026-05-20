@@ -6,66 +6,228 @@
 <style>
   * { box-sizing: border-box; }
   body {
-    width: 460px;
-    max-height: 640px;
+    width: 520px;
+    max-height: 680px;
     margin: 0;
-    padding: 12px;
+    padding: 0;
     font: 13px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-    color: #222;
+    color: #1f2937;
     background: #fafafa;
     overflow-y: auto;
   }
-  h3 {
-    margin: 0;
-    font-size: 14px;
-    color: #1d3557;
+  /* ─────────── Header / Banner ─────────── */
+  header {
+    background: #1d3557;
+    color: #fff;
+    padding: 10px 14px;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    position: sticky;
+    top: 0;
+    z-index: 10;
   }
-  .subtitle { font-size: 11px; color: #888; margin: 2px 0 10px; }
-  .badge {
+  header .title { font-size: 14px; font-weight: 600; }
+  header .state {
     font-size: 11px;
-    background: #1d3557;
-    color: #fff;
-    padding: 2px 6px;
-    border-radius: 3px;
-    font-weight: normal;
+    background: rgba(255,255,255,0.18);
+    padding: 2px 8px;
+    border-radius: 10px;
   }
-  label { font-size: 12px; color: #555; }
-  input[type=number], input[type=text], input[type=password], textarea, select {
-    width: 100%;
-    padding: 5px 7px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
+  header .state.running { background: #2a9d4a; }
+
+  #banner {
+    padding: 8px 14px;
     font-size: 12px;
-    background: #fff;
-    font-family: inherit;
+    background: #fff8dc;
+    border-bottom: 1px solid #f0d878;
+    color: #885500;
+    display: none;
   }
-  textarea { resize: vertical; min-height: 60px; }
-  .tabs { display: flex; border-bottom: 1px solid #ddd; margin-bottom: 10px; flex-wrap: wrap; }
-  .tab {
-    padding: 6px 10px;
+  #banner.show { display: block; }
+  #banner.ok { background: #e8f6ee; border-color: #b4dec2; color: #1d6a3a; }
+  #banner a { color: inherit; font-weight: 600; cursor: pointer; text-decoration: underline; }
+
+  /* ─────────── Tabs ─────────── */
+  nav.tabs {
+    display: flex;
+    background: #fff;
+    border-bottom: 1px solid #e5e7eb;
+    position: sticky;
+    top: 38px;
+    z-index: 9;
+  }
+  nav.tabs .tab {
+    flex: 1;
+    text-align: center;
+    padding: 9px 0;
     cursor: pointer;
     font-size: 12px;
-    color: #666;
+    color: #6b7280;
     border-bottom: 2px solid transparent;
   }
-  .tab.active {
+  nav.tabs .tab.active {
     color: #1d3557;
     border-bottom-color: #1d3557;
     font-weight: 600;
   }
+  nav.tabs .tab.locked { opacity: 0.4; cursor: not-allowed; }
+
+  main { padding: 12px 14px 16px; }
   .panel { display: none; }
   .panel.active { display: block; }
+
+  /* ─────────── Sections / Cards ─────────── */
+  .card {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+  }
+  .card-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #1d3557;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .card-title .hint {
+    font-size: 11px;
+    color: #9ca3af;
+    font-weight: normal;
+  }
+
+  /* ─────────── Forms ─────────── */
+  label { font-size: 12px; color: #4b5563; }
+  input[type=number], input[type=text], input[type=password], textarea, select {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid #d1d5db;
+    border-radius: 5px;
+    font-size: 12px;
+    background: #fff;
+    font-family: inherit;
+  }
+  textarea { resize: vertical; min-height: 60px; line-height: 1.5; }
+  input:focus, textarea:focus, select:focus { outline: 2px solid #1d3557; outline-offset: -1px; }
+  .row { display: flex; gap: 8px; margin-top: 6px; }
+  .row > div { flex: 1; }
+  .row label { display: block; margin-bottom: 2px; }
+
+  /* ─────────── Buttons ─────────── */
+  button {
+    padding: 7px 12px;
+    border: none;
+    border-radius: 5px;
+    font-size: 12px;
+    cursor: pointer;
+    color: #fff;
+    background: #1d3557;
+    font-family: inherit;
+  }
+  button.full { width: 100%; }
+  button.gray { background: #6b7280; }
+  button.red { background: #c33; }
+  button.green { background: #2a9d4a; }
+  button.outline {
+    background: #fff;
+    color: #1d3557;
+    border: 1px solid #1d3557;
+  }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.small { font-size: 11px; padding: 4px 8px; }
+  button.huge {
+    width: 100%;
+    padding: 14px 0;
+    font-size: 14px;
+    font-weight: 600;
+    box-shadow: 0 2px 4px rgba(42, 157, 74, 0.3);
+  }
+  .btns { display: flex; gap: 6px; margin-top: 8px; }
+  .btns > button { flex: 1; }
+
+  /* ─────────── Checklist ─────────── */
+  .checklist {
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin-bottom: 10px;
+    font-size: 12px;
+  }
+  .checklist-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 2px 0;
+  }
+  .checklist-item .status {
+    font-weight: 600;
+  }
+  .checklist-item.done .status { color: #2a9d4a; }
+  .checklist-item.todo .status { color: #c33; }
+
+  /* ─────────── Chips ─────────── */
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 4px;
+    min-height: 36px;
+    border: 1px solid #d1d5db;
+    border-radius: 5px;
+    background: #fff;
+  }
+  .chip {
+    background: #e8eef5;
+    color: #1d3557;
+    padding: 2px 6px;
+    border-radius: 10px;
+    font-size: 11px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .chip .x {
+    cursor: pointer;
+    color: #6b7280;
+    font-weight: bold;
+  }
+  .chip .x:hover { color: #c33; }
+  .chips input[type=text] {
+    flex: 1;
+    min-width: 100px;
+    border: none;
+    padding: 2px 4px;
+    background: transparent;
+    font-size: 12px;
+  }
+  .chips input:focus { outline: none; }
+
+  /* ─────────── Tree (position selector) ─────────── */
+  details.collapsible {
+    margin-top: 4px;
+  }
+  details.collapsible > summary {
+    cursor: pointer;
+    font-size: 12px;
+    color: #6b7280;
+    padding: 4px 0;
+    user-select: none;
+  }
+  details.collapsible > summary::marker { color: #9ca3af; }
+
   .tree {
     max-height: 200px;
     overflow-y: auto;
-    border: 1px solid #e0e0e0;
-    border-radius: 4px;
+    border: 1px solid #e5e7eb;
+    border-radius: 5px;
     background: #fff;
     padding: 4px;
     font-size: 12px;
+    margin-top: 4px;
   }
   .tree-l1 {
     background: #f0f4f8;
@@ -75,49 +237,38 @@
     cursor: pointer;
     font-weight: 600;
     color: #1d3557;
-    display: flex;
-    align-items: center;
-    gap: 4px;
+    display: flex; align-items: center; gap: 4px;
   }
   .tree-l1 .count {
-    font-weight: normal;
-    font-size: 10px;
-    color: #999;
-    margin-left: auto;
+    font-weight: normal; font-size: 10px; color: #9ca3af; margin-left: auto;
   }
   .tree-l2-wrap { padding-left: 16px; display: none; }
   .tree-l2-wrap.open { display: block; }
   .tree-l2 {
-    padding: 2px 4px;
-    cursor: pointer;
-    color: #444;
-    display: flex;
-    align-items: center;
-    gap: 4px;
+    padding: 2px 4px; cursor: pointer; color: #374151;
+    display: flex; align-items: center; gap: 4px;
   }
   .tree-l2:hover { background: #f5f9fc; }
   .tree-l3-wrap { padding-left: 14px; display: none; }
   .tree-l3-wrap.open { display: block; }
-  .tree-l3 { padding: 1px 4px; color: #666; font-size: 11px; }
+  .tree-l3 { padding: 1px 4px; color: #6b7280; font-size: 11px; }
   .tree-l3 label { font-size: 11px; cursor: pointer; }
   .tree input[type=checkbox] { margin: 0 4px 0 0; vertical-align: middle; }
   .toggle-arrow {
-    display: inline-block;
-    width: 10px;
-    color: #999;
-    font-size: 9px;
-    transition: transform .2s;
+    display: inline-block; width: 10px; color: #9ca3af; font-size: 9px; transition: transform .2s;
   }
   .toggle-arrow.open { transform: rotate(90deg); }
+  .quick-filter { width: 100%; margin-bottom: 4px; font-size: 11px; padding: 4px 6px; }
+
+  /* ─────────── City grid ─────────── */
   .city-grid {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 2px;
-    margin-top: 4px;
-    max-height: 90px;
+    max-height: 80px;
     overflow-y: auto;
-    border: 1px solid #e0e0e0;
-    border-radius: 4px;
+    border: 1px solid #e5e7eb;
+    border-radius: 5px;
     padding: 6px;
     background: #fff;
   }
@@ -128,78 +279,150 @@
     white-space: nowrap;
     overflow: hidden;
   }
-  .row { display: flex; gap: 6px; margin-top: 6px; }
-  .row > div { flex: 1; }
-  .row label { display: block; margin-bottom: 2px; }
-  .sel-summary {
-    margin: 8px 0;
-    padding: 6px 8px;
-    background: #fff;
-    border: 1px solid #e0e0e0;
-    border-radius: 4px;
-    font-size: 12px;
-  }
-  .sel-summary .num { color: #c33; font-weight: 600; }
-  .sel-summary .est { color: #888; font-size: 11px; margin-left: 8px; }
-  .btns { display: flex; gap: 6px; margin-top: 10px; }
-  button {
-    flex: 1;
-    padding: 7px 0;
-    border: none;
-    border-radius: 4px;
-    font-size: 12px;
-    cursor: pointer;
-    color: #fff;
-    background: #1d3557;
-  }
-  button.gray { background: #888; }
-  button.red { background: #c33; }
-  button.green { background: #2a9d4a; }
-  button:disabled { opacity: 0.4; cursor: not-allowed; }
-  button.small { font-size: 11px; padding: 4px 8px; flex: 0; }
-  .stats {
-    margin-top: 6px;
-    padding: 6px 8px;
-    background: #fff;
-    border: 1px solid #eee;
-    border-radius: 4px;
-    font-size: 12px;
+
+  /* ─────────── Pipeline / Progress ─────────── */
+  .stage-bar {
     display: flex;
-    justify-content: space-between;
+    gap: 4px;
+    margin: 8px 0;
   }
-  .stats b { color: #1d3557; }
-  #log {
-    margin-top: 8px;
-    padding: 8px;
-    height: 130px;
-    overflow-y: auto;
-    background: #1e1e1e;
-    color: #d4d4d4;
+  .stage {
+    flex: 1;
+    padding: 6px;
+    text-align: center;
     border-radius: 4px;
-    font: 11px/1.4 ui-monospace, Menlo, monospace;
-    white-space: pre-wrap;
-  }
-  .hint {
-    margin-top: 6px;
-    padding: 6px 8px;
-    background: #fffbea;
-    border-left: 3px solid #f0c040;
-    border-radius: 3px;
+    background: #f3f4f6;
+    color: #6b7280;
     font-size: 11px;
-    color: #885500;
+    border: 1px solid #e5e7eb;
   }
-  .quick-filter { width: 100%; margin-bottom: 4px; font-size: 11px; padding: 4px 6px; }
-  .queue-list {
-    max-height: 240px;
+  .stage.active {
+    background: #fff8dc;
+    color: #885500;
+    border-color: #f0d878;
+    font-weight: 600;
+  }
+  .stage.done {
+    background: #e8f6ee;
+    color: #1d6a3a;
+    border-color: #b4dec2;
+  }
+  .stage.error {
+    background: #fde8e8;
+    color: #c33;
+    border-color: #f5b8b8;
+  }
+
+  /* ─────────── Result list ─────────── */
+  .filter-chips {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  .filter-chips .fchip {
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 12px;
+    background: #f3f4f6;
+    color: #6b7280;
+    cursor: pointer;
+    border: 1px solid #e5e7eb;
+  }
+  .filter-chips .fchip.active {
+    background: #1d3557;
+    color: #fff;
+    border-color: #1d3557;
+  }
+
+  .scored-list {
+    max-height: 320px;
     overflow-y: auto;
-    border: 1px solid #e0e0e0;
-    border-radius: 4px;
+    border: 1px solid #e5e7eb;
+    border-radius: 5px;
+    background: #fff;
+    font-size: 12px;
+  }
+  .scored-row {
+    padding: 6px 8px;
+    border-bottom: 1px solid #f3f4f6;
+  }
+  .scored-row:last-child { border-bottom: 0; }
+  .scored-row.marked-applied { background: #f3f9f4; }
+  .scored-row.marked-not_interested { display: none; }
+  .scored-row .head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+  }
+  .score-badge {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 5px;
+    border-radius: 3px;
+    color: #fff;
+    min-width: 36px;
+    text-align: center;
+  }
+  .sb-S { background: #c33; }
+  .sb-A { background: #2a9d4a; }
+  .sb-B { background: #f0a040; }
+  .sb-C { background: #888; }
+  .sb-Reject { background: #555; }
+  .sb-none { background: #d1d5db; color: #6b7280; }
+  .scored-row .title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .scored-row .meta {
+    color: #6b7280;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .scored-row .expand {
+    margin-top: 6px;
+    padding-left: 44px;
+    display: none;
+    color: #4b5563;
+    font-size: 11px;
+  }
+  .scored-row.open .expand { display: block; }
+  .scored-row .reason { margin-bottom: 4px; }
+  .scored-row .concerns { color: #c33; margin-bottom: 4px; }
+  .scored-row .pitch {
+    background: #f0f4f8;
+    padding: 4px 6px;
+    border-left: 3px solid #1d3557;
+    border-radius: 0 3px 3px 0;
+    font-style: italic;
+    margin-bottom: 4px;
+  }
+  .scored-row .actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 4px;
+  }
+  .scored-row .actions button {
+    font-size: 10px;
+    padding: 3px 6px;
+  }
+
+  /* ─────────── Queue snippet (in 运行 tab) ─────────── */
+  .queue-mini {
+    max-height: 120px;
+    overflow-y: auto;
+    border: 1px solid #e5e7eb;
+    border-radius: 5px;
     background: #fff;
     font-size: 11px;
+    margin-top: 6px;
   }
   .queue-row {
     padding: 3px 6px;
-    border-bottom: 1px solid #f0f0f0;
+    border-bottom: 1px solid #f3f4f6;
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -211,299 +434,346 @@
     border-radius: 2px;
     color: #fff;
   }
-  .qs-pending { background: #999; }
+  .qs-pending { background: #9ca3af; }
   .qs-running { background: #f0a040; }
   .qs-done { background: #2a9d4a; }
   .qs-failed { background: #c33; }
   .qs-failed_skipped { background: #663366; }
+
+  /* ─────────── Log ─────────── */
+  #log {
+    margin-top: 8px;
+    padding: 8px;
+    height: 120px;
+    overflow-y: auto;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    border-radius: 4px;
+    font: 11px/1.4 ui-monospace, Menlo, monospace;
+    white-space: pre-wrap;
+  }
+
+  /* ─────────── History ─────────── */
+  .history-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 8px;
+    border-bottom: 1px solid #f3f4f6;
+    cursor: pointer;
+  }
+  .history-row:hover { background: #f9fafb; }
+  .history-row:last-child { border-bottom: 0; }
+  .history-date { font-weight: 600; color: #1d3557; }
+  .history-stats { color: #6b7280; font-size: 11px; }
+
+  /* ─────────── Hints / Misc ─────────── */
+  .muted { color: #9ca3af; font-size: 11px; }
   .section-title {
     font-size: 12px;
     color: #1d3557;
     font-weight: 600;
     margin: 12px 0 4px;
     padding-bottom: 4px;
-    border-bottom: 1px solid #e0e0e0;
+    border-bottom: 1px solid #e5e7eb;
   }
   .section-title:first-child { margin-top: 4px; }
-  .scored-list {
-    max-height: 200px;
-    overflow-y: auto;
-    border: 1px solid #e0e0e0;
-    border-radius: 4px;
-    background: #fff;
-    font-size: 11px;
-    margin-top: 6px;
-  }
-  .scored-row {
-    padding: 4px 6px;
-    border-bottom: 1px solid #f0f0f0;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .scored-row:last-child { border-bottom: 0; }
-  .score-badge {
-    font-size: 10px;
-    font-weight: 600;
-    padding: 1px 5px;
-    border-radius: 3px;
-    color: #fff;
-    min-width: 32px;
-    text-align: center;
-  }
-  .sb-S { background: #c33; }
-  .sb-A { background: #2a9d4a; }
-  .sb-B { background: #f0a040; }
-  .sb-C { background: #888; }
-  .sb-Reject { background: #555; }
-  .sb-none { background: #ccc; color: #555; }
-  .scored-row .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .scored-row .salary { color: #666; font-size: 10px; }
 </style>
 </head>
 <body>
 
-<h3>
-  Boss 求职雷达
-  <span class="badge" id="state">空闲</span>
-</h3>
-<div class="subtitle">采集 + AI 打分 + 微信推送一体化</div>
+<header>
+  <span class="title">Boss 求职雷达</span>
+  <span class="state" id="state">空闲</span>
+</header>
 
-<div class="tabs">
-  <div class="tab active" data-panel="config">配置</div>
-  <div class="tab" data-panel="profile">个人画像</div>
-  <div class="tab" data-panel="queue">队列</div>
+<div id="banner"></div>
+
+<nav class="tabs">
+  <div class="tab active" data-panel="profile">画像</div>
+  <div class="tab" data-panel="search">搜索</div>
   <div class="tab" data-panel="run">运行</div>
+  <div class="tab" data-panel="history">📊 历史</div>
+</nav>
+
+<main>
+
+<!-- ════════════════════════════════════ 画像 ════════════════════════════════════ -->
+<div class="panel active" id="panel-profile">
+
+  <div class="card">
+    <div class="card-title">
+      📋 完成度
+      <span class="hint">画像 + API key 越全,打分越准</span>
+    </div>
+    <div class="checklist" id="completionChecklist"></div>
+    <div class="btns">
+      <button id="importYaml" class="outline">📥 从 profile.yaml 导入</button>
+      <button id="importResume" class="outline">📄 从 resume.md 导入</button>
+    </div>
+    <input type="file" id="yamlFile" accept=".yaml,.yml" style="display:none">
+    <input type="file" id="resumeFile" accept=".md,.txt" style="display:none">
+  </div>
+
+  <div class="card">
+    <div class="card-title">候选人画像</div>
+    <label>一句话 summary(技术栈 + 年限 + 方向)</label>
+    <textarea id="pfSummary" rows="2"></textarea>
+
+    <label style="margin-top:8px;display:block">完整简历(Markdown)</label>
+    <textarea id="pfResume" rows="5"></textarea>
+
+    <div class="row">
+      <div>
+        <label>最低月薪 (元)</label>
+        <input type="number" id="pfMonthlyMin" value="30000" min="0" step="1000">
+      </div>
+      <div>
+        <label>理想月薪 (元)</label>
+        <input type="number" id="pfMonthlyIdeal" value="40000" min="0" step="1000">
+      </div>
+    </div>
+
+    <label style="margin-top:8px;display:block">S 级目标岗位(命中即满档加分)</label>
+    <textarea id="pfSTier" rows="3" placeholder="每行一个,例如: AI Solution Engineer"></textarea>
+
+    <label style="margin-top:8px;display:block">A 级目标岗位(相关但非首选)</label>
+    <textarea id="pfATier" rows="3"></textarea>
+
+    <label style="margin-top:8px;display:block">硬拒关键词(命中直接 Reject,不调 API)</label>
+    <textarea id="pfHardReject" rows="3"></textarea>
+  </div>
+
+  <div class="card">
+    <div class="card-title">🔑 API key <span class="hint">只存浏览器本地,不上网</span></div>
+    <label>DeepSeek API key</label>
+    <input type="password" id="apiDeepseek" placeholder="sk-...">
+
+    <div class="row">
+      <div>
+        <label>WxPusher App Token</label>
+        <input type="password" id="apiWxToken" placeholder="AT_...">
+      </div>
+      <div>
+        <label>WxPusher UID</label>
+        <input type="password" id="apiWxUid" placeholder="UID_...">
+      </div>
+    </div>
+
+    <div class="btns">
+      <button id="saveProfile" class="green">保存</button>
+      <button id="testPush" class="outline">📨 测试推送</button>
+    </div>
+  </div>
+
 </div>
 
-<!-- ============================================================ 配置 -->
-<div class="panel active" id="panel-config">
+<!-- ════════════════════════════════════ 搜索 ════════════════════════════════════ -->
+<div class="panel" id="panel-search">
 
-  <div class="section-title">① 搜索目标(职位树 ⊕ 关键词,二选一或都选)</div>
-  <input class="quick-filter" id="qfPos" placeholder="搜索职位名(如: 售前 / 客户成功 / 解决方案)">
-  <div class="tree" id="positionTree">加载中...</div>
-  <div style="font-size:11px;color:#888;margin:4px 0">
-    已选职位: <b id="selPosCount" style="color:#c33">0</b> 个
-    <button class="small gray" id="clearPos" style="float:right;margin-left:4px">清空职位</button>
-  </div>
-
-  <label style="display:block;margin-top:6px">关键词自由输入(每行一个,比如 "AI 解决方案工程师" / "Solution Engineer")</label>
-  <textarea id="customQueries" rows="3" placeholder="AI 解决方案工程师
-Solution Engineer
-Customer Engineer"></textarea>
-
-  <div class="section-title">② 城市</div>
-  <input class="quick-filter" id="qfCity" placeholder="搜索城市">
-  <div class="city-grid" id="cityGrid"></div>
-  <div style="font-size:11px;color:#888;margin-top:2px">
-    已选城市: <b id="selCityCount" style="color:#c33">0</b> 个
-    <button class="small gray" id="clearCity" style="float:right">清空城市</button>
-  </div>
-
-  <div class="section-title">③ 筛选(全部可选,留空 = 不限)</div>
-  <div class="row">
-    <div>
-      <label>工作经验</label>
-      <select id="filterExp"><option value="">不限</option></select>
-    </div>
-    <div>
-      <label>学历</label>
-      <select id="filterDeg"><option value="">不限</option></select>
-    </div>
-  </div>
-
-  <div class="row">
-    <div>
-      <label>薪资区间</label>
-      <select id="filterSalary"><option value="">不限</option></select>
-    </div>
-    <div>
-      <label>发布时间</label>
-      <select id="filterDate">
-        <option value="">不限</option>
-        <option value="1">今日</option>
-        <option value="2">3 日内</option>
-        <option value="3">一周内</option>
-        <option value="4">一月内</option>
+  <div class="card">
+    <div class="card-title">📦 常用配置</div>
+    <div class="row">
+      <select id="presetSelect" style="flex:2">
+        <option value="">— 从画像生成的默认值 —</option>
       </select>
+      <button id="loadPreset" class="outline small" style="flex:0">载入</button>
+      <button id="deletePreset" class="red small" style="flex:0">删除</button>
+    </div>
+    <div class="row">
+      <input type="text" id="presetName" placeholder="给当前配置起个名字" style="flex:2">
+      <button id="savePreset" class="outline small" style="flex:0">保存为预设</button>
     </div>
   </div>
 
-  <div style="margin-top:6px">
-    <label>公司过滤(留空 = 不限;多个用空格/逗号分隔,子串匹配)</label>
-    <input type="text" id="filterCompany" placeholder="如: 字节 阿里 SenseTime">
+  <div class="card">
+    <div class="card-title">🔍 搜什么</div>
+    <label>关键词(回车添加,× 移除)</label>
+    <div class="chips" id="keywordChips">
+      <input type="text" id="keywordInput" placeholder="如 AI 解决方案工程师 / Solution Engineer">
+    </div>
+
+    <details class="collapsible">
+      <summary>+ 加 Boss 内部职位类目(可选)</summary>
+      <input class="quick-filter" id="qfPos" placeholder="搜职位名(售前/客户成功/解决方案)">
+      <div class="tree" id="positionTree">加载中...</div>
+      <div class="muted" style="margin-top:4px">
+        已选职位: <b id="selPosCount">0</b> 个
+        <button class="small gray" id="clearPos" style="float:right">清空</button>
+      </div>
+    </details>
   </div>
 
-  <div class="section-title">④ 运行参数</div>
-  <div class="row">
-    <div>
-      <label>排序方式</label>
-      <select id="sortMode">
-        <option value="comprehensive">综合排序</option>
-        <option value="newest" selected>最新发布</option>
-      </select>
-    </div>
-    <div>
-      <label>运行模式</label>
-      <select id="runMode">
-        <option value="window_isolated">独立窗口(最小化)</option>
-        <option value="tab_visible">当前窗口可见</option>
-      </select>
-    </div>
-  </div>
-
-  <div class="row">
-    <div>
-      <label>每词最多滚动</label>
-      <input type="number" id="maxScrolls" value="15" min="1" max="50">
-    </div>
-    <div>
-      <label>总条数上限</label>
-      <input type="number" id="maxTotal" value="0" min="0">
+  <div class="card">
+    <div class="card-title">📍 在哪里</div>
+    <input class="quick-filter" id="qfCity" placeholder="搜城市">
+    <div class="city-grid" id="cityGrid"></div>
+    <div class="muted" style="margin-top:4px">
+      已选城市: <b id="selCityCount">0</b> 个
+      <button class="small gray" id="clearCity" style="float:right">清空</button>
     </div>
   </div>
 
-  <div class="row">
-    <div>
-      <label>页内停留下限</label>
-      <input type="number" id="dwellMin" value="2" min="1" step="0.5">
+  <div class="card">
+    <div class="card-title">🎯 筛选 <span class="hint">默认从画像继承</span></div>
+    <div class="row">
+      <div>
+        <label>经验</label>
+        <select id="filterExp"><option value="">不限</option></select>
+      </div>
+      <div>
+        <label>学历</label>
+        <select id="filterDeg"><option value="">不限</option></select>
+      </div>
     </div>
-    <div>
-      <label>页内停留上限</label>
-      <input type="number" id="dwellMax" value="5" min="2" step="0.5">
+    <div class="row">
+      <div>
+        <label>薪资区间</label>
+        <select id="filterSalary"><option value="">不限</option></select>
+      </div>
+      <div>
+        <label>发布时间</label>
+        <select id="filterDate">
+          <option value="">不限</option>
+          <option value="1">今日</option>
+          <option value="2">3 日内</option>
+          <option value="3" selected>一周内</option>
+          <option value="4">一月内</option>
+        </select>
+      </div>
     </div>
-    <div>
-      <label>任务间下限</label>
-      <input type="number" id="gapMin" value="10" min="3">
-    </div>
-    <div>
-      <label>任务间上限</label>
-      <input type="number" id="gapMax" value="25" min="5">
-    </div>
-  </div>
-
-  <div class="sel-summary">
-    任务组合数: <span class="num" id="comboCount">0</span>
-    <span class="est" id="comboEst"></span>
-  </div>
-
-  <div class="btns">
-    <button id="genQueue" class="green">生成任务队列</button>
-  </div>
-</div>
-
-<!-- ============================================================ 个人画像 -->
-<div class="panel" id="panel-profile">
-
-  <div class="section-title">候选人画像(用于 AI 适配度打分)</div>
-
-  <label>一句话 summary(技术栈 + 年限 + 方向)</label>
-  <textarea id="pfSummary" rows="2" placeholder="某大学 CS 硕士,3 年 AI 应用开发,Python/FastAPI/LangGraph,有 RAG/Agent 落地经验。"></textarea>
-
-  <label style="margin-top:6px;display:block">完整简历(Markdown,LLM 会全文读)</label>
-  <textarea id="pfResume" rows="6" placeholder="# 简历&#10;## 教育...&#10;## 工作经历..."></textarea>
-
-  <div class="row">
-    <div>
-      <label>最低月薪 (元)</label>
-      <input type="number" id="pfMonthlyMin" value="30000" min="0" step="1000">
-    </div>
-    <div>
-      <label>理想月薪 (元)</label>
-      <input type="number" id="pfMonthlyIdeal" value="40000" min="0" step="1000">
+    <div style="margin-top:6px">
+      <label>公司过滤(留空 = 不限;空格/逗号分隔)</label>
+      <input type="text" id="filterCompany" placeholder="如: 字节 阿里 SenseTime">
     </div>
   </div>
 
-  <label style="margin-top:6px;display:block">S 级目标岗位(每行一个 → LLM 命中即满档加分)</label>
-  <textarea id="pfSTier" rows="3" placeholder="AI Solution Engineer
-GenAI Solution Engineer
-AI 解决方案工程师"></textarea>
-
-  <label style="margin-top:6px;display:block">A 级目标岗位(每行一个 → 相关但非首选)</label>
-  <textarea id="pfATier" rows="3" placeholder="LLM Application Engineer
-AI 应用开发工程师
-Technical Customer Success"></textarea>
-
-  <label style="margin-top:6px;display:block">硬拒关键词(每行一个 → 命中直接 Reject,不调 API)</label>
-  <textarea id="pfHardReject" rows="3" placeholder="算法研究员
-大模型算法
-模型训练
-外包驻场
-培训讲师"></textarea>
-
-  <div class="section-title">API key(只存浏览器本地)</div>
-
-  <label>DeepSeek API key(sk-...)</label>
-  <input type="password" id="apiDeepseek" placeholder="sk-xxxxxxxx">
-
-  <div class="row">
-    <div>
-      <label>WxPusher App Token</label>
-      <input type="password" id="apiWxToken" placeholder="AT_xxxxxxxx">
+  <details class="collapsible">
+    <summary>⚙️ 高级:运行参数 / 排序 / 模式</summary>
+    <div class="card">
+      <div class="row">
+        <div>
+          <label>排序</label>
+          <select id="sortMode">
+            <option value="comprehensive">综合排序</option>
+            <option value="newest" selected>最新发布</option>
+          </select>
+        </div>
+        <div>
+          <label>运行模式</label>
+          <select id="runMode">
+            <option value="window_isolated">独立窗口(最小化)</option>
+            <option value="tab_visible">当前窗口可见</option>
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <div><label>每词最多滚动</label><input type="number" id="maxScrolls" value="15" min="1" max="50"></div>
+        <div><label>总条数上限(0=不限)</label><input type="number" id="maxTotal" value="0" min="0"></div>
+      </div>
+      <div class="row">
+        <div><label>页内停留下限</label><input type="number" id="dwellMin" value="2" min="1" step="0.5"></div>
+        <div><label>页内停留上限</label><input type="number" id="dwellMax" value="5" min="2" step="0.5"></div>
+      </div>
+      <div class="row">
+        <div><label>任务间下限</label><input type="number" id="gapMin" value="10" min="3"></div>
+        <div><label>任务间上限</label><input type="number" id="gapMax" value="25" min="5"></div>
+      </div>
     </div>
-    <div>
-      <label>WxPusher UID</label>
-      <input type="password" id="apiWxUid" placeholder="UID_xxxxxxxx">
+  </details>
+
+  <div class="card">
+    <div style="font-size:12px;color:#6b7280;margin-bottom:6px">
+      预计 <b id="comboCount" style="color:#c33">0</b> 个任务
+      <span id="comboEst" class="muted"></span>
     </div>
-  </div>
-
-  <div class="btns">
-    <button id="saveProfile" class="green">保存</button>
-    <button id="testPush" class="gray">测试推送</button>
-  </div>
-
-  <div class="hint">
-    所有数据存在 <code>chrome.storage.local</code>(本机,不会上网)。换电脑要重新填一次。
+    <button id="genQueue" class="green full">✓ 生成任务队列,去运行</button>
   </div>
 </div>
 
-<!-- ============================================================ 队列 -->
-<div class="panel" id="panel-queue">
-  <div class="stats">
-    <span>总: <b id="qTotal">0</b></span>
-    <span>完成: <b id="qDone" style="color:#2a9d4a">0</b></span>
-    <span>失败: <b id="qFail" style="color:#c33">0</b></span>
-    <span>待跑: <b id="qPending" style="color:#666">0</b></span>
-  </div>
-  <div class="queue-list" id="queueList" style="margin-top:8px">(尚未生成队列)</div>
-  <div class="btns">
-    <button id="exportQueueState" class="gray small">导出队列状态</button>
-    <button id="clearQueue" class="red small">清空队列</button>
-  </div>
-</div>
-
-<!-- ============================================================ 运行 -->
+<!-- ════════════════════════════════════ 运行 ════════════════════════════════════ -->
 <div class="panel" id="panel-run">
-  <div class="stats">
-    <span>数据池: <b id="total">—</b></span>
-    <span id="progress" style="color:#666"></span>
+
+  <div class="card">
+    <div class="card-title">
+      🚀 一键流水线
+      <span class="hint">采集 → 打分 → 推送,全自动</span>
+    </div>
+
+    <div class="stage-bar">
+      <div class="stage" id="stageCrawl">① 采集</div>
+      <div class="stage" id="stageScore">② AI 打分</div>
+      <div class="stage" id="stagePush">③ 推送</div>
+    </div>
+
+    <button id="runPipeline" class="huge green">🚀 跑一轮</button>
+    <button id="stopPipeline" class="huge red" style="display:none">■ 停止</button>
+
+    <div style="margin-top:8px;display:flex;justify-content:space-between;font-size:11px;color:#6b7280">
+      <span>数据池: <b id="poolTotal">0</b></span>
+      <span id="progress"></span>
+    </div>
   </div>
 
-  <div class="btns">
-    <button id="start" class="green">开始采集</button>
-    <button id="resume" class="green">续跑</button>
-    <button id="stop" class="red" disabled>停止</button>
-  </div>
+  <details class="collapsible">
+    <summary>⚙️ 分步操作(只跑某一步)</summary>
+    <div class="card">
+      <div class="btns">
+        <button id="startCrawl" class="outline">① 仅采集</button>
+        <button id="resumeCrawl" class="outline">续跑</button>
+        <button id="stopCrawl" class="red" disabled>停</button>
+      </div>
+      <div class="btns">
+        <button id="scoreAll" class="outline">② 仅打分</button>
+        <button id="pushNow" class="outline">③ 仅推送</button>
+      </div>
+      <div class="btns">
+        <button id="exportJobRadar" class="gray small">导出 job-radar JSON</button>
+        <button id="exportCsv" class="gray small">导出 CSV</button>
+        <button id="clearPool" class="red small">清空数据池</button>
+      </div>
+      <div class="queue-mini" id="queueMini"></div>
+    </div>
+  </details>
 
-  <div class="btns">
-    <button id="scoreAll" class="green">AI 全部打分</button>
-    <button id="pushNow" class="green">一键推送 WxPusher</button>
+  <div class="card">
+    <div class="card-title">📊 数据池</div>
+    <div class="filter-chips" id="resultFilters">
+      <span class="fchip active" data-filter="all">全部</span>
+      <span class="fchip" data-filter="S">S</span>
+      <span class="fchip" data-filter="A">A</span>
+      <span class="fchip" data-filter="B">B</span>
+      <span class="fchip" data-filter="未打分">未打分</span>
+      <span class="fchip" data-filter="已投">已投</span>
+    </div>
+    <div class="scored-list" id="scoredList"></div>
+    <div class="muted" id="scoreSummary" style="margin-top:4px"></div>
   </div>
-
-  <div class="btns">
-    <button id="exportJobRadar" class="gray">导出 job-radar JSON</button>
-    <button id="export" class="gray">导出 CSV</button>
-    <button id="clear" class="gray">清空数据池</button>
-  </div>
-
-  <div id="scoreSummary" style="margin-top:8px;font-size:11px;color:#666"></div>
-  <div class="scored-list" id="scoredList"></div>
 
   <div id="log"></div>
-  <div class="hint">
-    流程:① 配置 + 个人画像 → ② 生成队列 → ③ 开始采集 → ④ AI 全部打分 → ⑤ 一键推送
+</div>
+
+<!-- ════════════════════════════════════ 历史 ════════════════════════════════════ -->
+<div class="panel" id="panel-history">
+  <div class="card">
+    <div class="card-title">📊 近 30 天</div>
+    <div id="historyList" class="muted">(暂无)</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">🚫 屏蔽公司</div>
+    <div id="blockedList" class="muted">(无)</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">⚙️ 维护</div>
+    <div class="btns">
+      <button id="rescoreAll" class="outline">🔁 全部重新打分</button>
+      <button id="clearHistory" class="red small">清空历史</button>
+    </div>
   </div>
 </div>
+
+</main>
 
 <script src="popup.js"></script>
 </body>

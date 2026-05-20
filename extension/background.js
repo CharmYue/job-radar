@@ -353,16 +353,22 @@ async function reconcileStaleRunOnBoot() {
 chrome.alarms.create('keepalive', { periodInMinutes: 0.5 });
 chrome.alarms.create('daily-auto-pipeline', { periodInMinutes: 30 });
 
-// SW 启动顺序:迁 IDB → 检查上次跑 → 修剪旧岗
+// SW 启动顺序:迁 IDB → 修剪旧岗 → 恢复未完成 run
 (async () => {
   try { await migrateChromeStorageToIdb(); } catch (e) { console.warn('[boot] idb migrate', e); }
-  try { await reconcileStaleRunOnBoot(); } catch (e) { console.warn('[boot] reconcile', e); }
   try { await pruneOldJobs(); } catch (e) { console.warn('[boot] prune', e); }
+  try { await reconcileStaleRunOnBoot(); } catch (e) { console.warn('[boot] stale reconcile', e); }
+  try { await reconcileActiveRunOnBoot(); } catch (e) { console.warn('[boot] resume', e); }
 })();
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'keepalive') return; // noop,只为保活
   if (alarm.name === 'daily-auto-pipeline') {
     try { await maybeAutoFire(); } catch (e) { console.warn('[daily auto]', e); }
+    return;
+  }
+  if (alarm.name === ALARM_ADVANCE) {
+    try { await advancePipelineRun(); } catch (e) { console.warn('[advance]', e); }
+    return;
   }
 });
 
@@ -623,7 +629,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           }
           break;
         case 'stop_pipeline':
-          pipelineState.shouldStop = true;
+          // 写持久 run 标志,让 alarm 推进 to finalize
+          await stopPipelineRun();
           sendResponse({ ok: true });
           break;
         case 'list_presets':
@@ -2230,82 +2237,323 @@ async function appendHistory(entry) {
 // ============================================================
 // 一键流水线
 // ============================================================
-async function runPipeline(config) {
-  if (pipelineState.stage === 'crawling' || pipelineState.stage === 'scoring' || pipelineState.stage === 'pushing') {
-    throw new Error('流水线已在跑');
+// ============================================================
+// Alarm 驱动的流水线状态机 (#1 完整版)
+// ------------------------------------------------------------
+// 旧版本是一根 long Promise 链(runPipeline → runCrawlAndWait → startCrawl
+// 内的 for-loop with sleeps)。MV3 SW 在 5 分钟总寿命/30s idle 上限下经常被
+// 干掉,run 中断,popup 看到假"采集中"或卡死状态。
+//
+// 新版本:
+//   1. chrome.storage.local.pipelineRun 持久化整 run 游标
+//   2. 每个 "step" 是 ONE 单元(一个 crawl task / 一次 score 调度 / 一次 push)
+//      跑完就写 storage + 通过 chrome.alarms 调度下一步 — SW 可以被杀,
+//      alarm 时间到了 SW 自动唤醒继续
+//   3. SW 启动时检测有 active run → 自动 schedule 下一步推进
+//   4. 单个 step 自身要在 SW 寿命内完成 — 通常 < 90s,SW 在活跃事件
+//      处理期间不会被杀
+// ============================================================
+const TERMINAL_STAGES = new Set(['done', 'error', 'stopped']);
+const ALARM_ADVANCE = 'advance-pipeline-run';
+
+async function getPipelineRun() {
+  return (await chrome.storage.local.get('pipelineRun')).pipelineRun || null;
+}
+async function setPipelineRun(run) {
+  await chrome.storage.local.set({ pipelineRun: run });
+}
+async function clearPipelineRun() {
+  await chrome.storage.local.remove('pipelineRun');
+}
+async function scheduleAdvance(delayMs) {
+  // chrome.alarms 最小 30s — 但 dev mode 没这个限制
+  // 用 when 比 delayInMinutes 精确
+  chrome.alarms.create(ALARM_ADVANCE, { when: Date.now() + Math.max(50, delayMs) });
+}
+
+async function startPipelineRun(config) {
+  // 检查是否已有 active run
+  const existing = await getPipelineRun();
+  if (existing && !TERMINAL_STAGES.has(existing.stage)) {
+    throw new Error(`流水线已在跑 (stage=${existing.stage}),先停止再启动`);
   }
+
+  const tasks = (config && config.tasks) || [];
+  // 建 taskQueue
+  const queue = {
+    tasks: tasks.map((t, idx) => ({
+      ...t, id: idx, status: 'pending', captured: 0, attempts: 0, lastError: '',
+    })),
+    createdAt: Date.now(),
+  };
+  await setTaskQueue(queue);
+  if (tasks.length > 0) log(`▶ 新队列: ${tasks.length} 个组合`);
+
+  const run = {
+    id: `run-${Date.now()}`,
+    config: { ...config },
+    stage: tasks.length > 0 ? 'crawl' : 'score',
+    startedAt: Date.now(),
+    stageStartedAt: Date.now(),
+    heartbeat: Date.now(),
+    taskIdx: 0,
+    consecutiveRiskCount: 0,
+    shouldStop: false,
+    error: '',
+    pass: 1,  // 1=主轮 / 2=补抓 failed-attempts<2
+  };
+  await setPipelineRun(run);
+
+  // 同步内存 pipelineState(popup 显示)
   pipelineState.shouldStop = false;
   pipelineState.error = '';
   pipelineState.startedAt = Date.now();
-  // 重置细化进度
-  pipelineState.crawl = { tasksDone: 0, tasksTotal: 0, jobsAdded: 0, currentTask: '' };
+  pipelineState.crawl = { tasksDone: 0, tasksTotal: tasks.length, jobsAdded: 0, currentTask: '' };
   pipelineState.score = { done: 0, total: 0 };
   pipelineState.push = { tier: '', sent: 0 };
-  const notifyStage = (stage, msg) => {
-    pipelineState.stage = stage;
-    pipelineState.progress = msg || '';
-    pipelineState.substep = msg || '';
-    pipelineState.stageStartedAt = Date.now();
-    chrome.runtime.sendMessage({ type: 'pipeline_progress', stage: msg || stage }).catch(() => {});
-    persistPipelineState().catch(() => {});
-  };
+  pipelineState.stage = run.stage === 'crawl' ? 'crawling' : 'scoring';
+  pipelineState.stageStartedAt = Date.now();
+  pipelineState.substep = run.stage === 'crawl' ? `采集 — ${tasks.length} 任务` : '打分';
+  await persistPipelineState();
+
+  await scheduleAdvance(200);
+  log(`▶ 流水线启动 ${run.id} (alarm-driven)`);
+}
+
+async function stopPipelineRun() {
+  const run = await getPipelineRun();
+  if (!run || TERMINAL_STAGES.has(run.stage)) return;
+  run.shouldStop = true;
+  await setPipelineRun(run);
+  // 同时设内存标志,让正在跑的 step 自己注意
+  pipelineState.shouldStop = true;
+  state.shouldStop = true;
+  // 戳 alarm 让 advance 尽快走入 finalize
+  await scheduleAdvance(100);
+}
+
+async function advancePipelineRun() {
+  const run = await getPipelineRun();
+  if (!run) return;
+  if (TERMINAL_STAGES.has(run.stage)) return;
+
+  run.heartbeat = Date.now();
+  await setPipelineRun(run);
+
+  if (run.shouldStop) return await finalizePipelineRun(run, 'stopped');
+
+  // 同步 stage 到内存
+  const stageMap = { crawl: 'crawling', score: 'scoring', push: 'pushing' };
+  pipelineState.stage = stageMap[run.stage] || run.stage;
 
   try {
-    // 阶段 1: 采集(如果有队列)
-    if (config && config.tasks && config.tasks.length > 0) {
-      notifyStage('crawling', `采集 — ${config.tasks.length} 任务`);
-      // 直接调 startCrawl 并 await 它的内部完成事件
-      // 我们用一个 promise 包一下:监听 state.running 转 false
-      await runCrawlAndWait({ ...config, resume: false });
-      if (pipelineState.shouldStop) {
-        notifyStage('idle', '已停止');
-        return;
-      }
-    } else {
-      log('  · 跳过采集(没有待跑队列)');
-    }
-
-    // 阶段 2: 打分
-    if (pipelineState.shouldStop) { notifyStage('idle', '已停止'); return; }
-    notifyStage('scoring', '打分');
-    const scoreRes = await scoreAllUnscored();
-    log(`  · 打分阶段: 新增 ${scoreRes.scored} 跳过 ${scoreRes.skipped}`);
-
-    // 阶段 3: 推送
-    if (pipelineState.shouldStop) { notifyStage('idle', '已停止'); return; }
-    notifyStage('pushing', '推送 WxPusher');
-    const pushRes = await pushNow();
-    log(`  · 推送成功: ${pushRes.total} 条`);
-
-    notifyStage('done', '完成');
-    log('✓ 一键流水线全部完成');
-    // 30 秒后回到 idle
-    setTimeout(() => {
-      if (pipelineState.stage === 'done') notifyStage('idle', '');
-    }, 30000);
+    if (run.stage === 'crawl') return await stepCrawl(run);
+    if (run.stage === 'score') return await stepScore(run);
+    if (run.stage === 'push') return await stepPush(run);
   } catch (e) {
+    log(`✗ 流水线 [${run.stage}] 异常: ${e.message}`);
+    run.stage = 'error';
+    run.error = e.message;
+    await setPipelineRun(run);
     pipelineState.stage = 'error';
     pipelineState.error = e.message;
-    log(`✗ 流水线异常: ${e.message}`);
-    chrome.runtime.sendMessage({ type: 'pipeline_progress', stage: '出错: ' + e.message }).catch(() => {});
-    throw e;
+    await persistPipelineState();
   }
 }
 
-function runCrawlAndWait(config) {
-  return new Promise((resolve, reject) => {
-    if (state.running) { reject(new Error('采集已在跑')); return; }
-    startCrawl(config).catch(() => {});
-    const startTs = Date.now();
-    let everRan = false;
-    const poll = setInterval(() => {
-      if (pipelineState.shouldStop && state.running) state.shouldStop = true;
-      if (state.running) everRan = true;
-      // 等 state.running 起来再等它落下来,或 5s 没起来就视为 startCrawl 已退出
-      if (!state.running && (everRan || Date.now() - startTs > 5000)) {
-        clearInterval(poll);
-        resolve();
+async function stepCrawl(run) {
+  const q = await getTaskQueue();
+  if (!q || !q.tasks || q.tasks.length === 0) {
+    // 没任务,直接跳到 score
+    return await transitionTo(run, 'score');
+  }
+
+  // 找下一个能跑的任务:
+  // - 主轮(pass=1):pending 或 failed 但 attempts<2
+  // - 补轮(pass=2):仅 failed 且 attempts<2
+  let nextIdx = -1;
+  for (let i = 0; i < q.tasks.length; i++) {
+    const t = q.tasks[i];
+    if (run.pass === 1) {
+      if (t.status === 'pending') { nextIdx = i; break; }
+      if (t.status === 'failed' && (t.attempts || 0) < 2) { nextIdx = i; break; }
+    } else {
+      if (t.status === 'failed' && (t.attempts || 0) < 2) { nextIdx = i; break; }
+    }
+  }
+
+  if (nextIdx === -1) {
+    // 没了
+    if (run.pass === 1) {
+      // 准备进补轮:看有没有 failed 待补
+      const hasFailed = q.tasks.some((t) => t.status === 'failed' && (t.attempts || 0) < 2);
+      if (hasFailed) {
+        run.pass = 2;
+        await setPipelineRun(run);
+        log(`▶ 第二轮:补抓 failed 任务`);
+        return await scheduleAdvance(60 * 1000);  // 第二轮前等 60s
       }
-    }, 500);
-  });
+    }
+    // 真完了
+    const doneN = q.tasks.filter((t) => t.status === 'done').length;
+    const failN = q.tasks.filter((t) => t.status === 'failed' || t.status === 'failed_skipped').length;
+    log(`=== 队列完成 完成 ${doneN}/${q.tasks.length}, 失败 ${failN} ===`);
+    log(`✓ 本次新增 ${state.added} 条`);
+    await cleanupTarget();
+    pendingContext = null;
+    state.running = false;
+    state.currentTabId = null;
+    state.currentWindowId = null;
+    state.persistentTabId = null;
+    return await transitionTo(run, 'score');
+  }
+
+  // 跑这个任务
+  const t = q.tasks[nextIdx];
+  state.config = run.config;
+  if (!state.running) {
+    state.running = true;
+    state.shouldStop = false;
+    state.added = 0;
+    state.currentKeywordTotal = q.tasks.length;
+  }
+  state.currentKeywordIdx = nextIdx + 1;
+  state.currentPage = 0;
+
+  pipelineState.crawl.tasksDone = nextIdx;
+  pipelineState.crawl.tasksTotal = q.tasks.length;
+  pipelineState.crawl.currentTask = `${t.positionName} @ ${t.cityName}`;
+  pipelineState.substep = `${run.pass === 2 ? '补抓 ' : '采集'} [${nextIdx + 1}/${q.tasks.length}] ${t.positionName} @ ${t.cityName}`;
+  await persistPipelineState();
+
+  const tag = t.experience ? ` exp=${t.experience}` : '';
+  log(`[${run.pass === 2 ? '补抓 ' : ''}${nextIdx + 1}/${q.tasks.length}] ${t.positionName} @ ${t.cityName}${tag}`);
+
+  t.status = 'running';
+  t.attempts = (t.attempts || 0) + 1;
+  const beforeAdded = state.added;
+  await setTaskQueue(q);
+
+  try {
+    await runOneTask(t, run.config);
+  } catch (e) {
+    log(`  ✗ 任务异常: ${e.message}`);
+  }
+
+  t.captured = state.added - beforeAdded;
+  pipelineState.crawl.jobsAdded = state.added;
+
+  let cooldown = rand((run.config.gapMin || 10) * 1000, (run.config.gapMax || 25) * 1000);
+  if (riskFlag) {
+    t.status = run.pass === 1 ? 'failed' : 'failed_skipped';
+    t.lastError = 'risk';
+    run.consecutiveRiskCount = (run.consecutiveRiskCount || 0) + 1;
+    log(`  ⚠ 风控,记 ${t.status}`);
+    if (run.consecutiveRiskCount >= 3) {
+      log(`  ⏸ 连续 3 次风控,冷却 30 分钟`);
+      run.consecutiveRiskCount = 0;
+      cooldown = 30 * 60 * 1000;
+    }
+  } else {
+    t.status = 'done';
+    run.consecutiveRiskCount = 0;
+  }
+  await setTaskQueue(q);
+  await setPipelineRun(run);
+
+  log(`  ⏸ 任务间冷却 ${(cooldown/1000).toFixed(0)}s (alarm 接力)`);
+  return await scheduleAdvance(cooldown);
+}
+
+async function stepScore(run) {
+  pipelineState.stage = 'scoring';
+  pipelineState.substep = '打分';
+  pipelineState.stageStartedAt = Date.now();
+  await persistPipelineState();
+  const r = await scoreAllUnscored();
+  log(`  · 打分阶段: 成功 ${r.scored}${r.failed?' 失败 '+r.failed:''} 跳过 ${r.skipped}`);
+  if (pipelineState.shouldStop) return await finalizePipelineRun(run, 'stopped');
+  return await transitionTo(run, 'push');
+}
+
+async function stepPush(run) {
+  pipelineState.stage = 'pushing';
+  pipelineState.substep = '推送 WxPusher';
+  pipelineState.stageStartedAt = Date.now();
+  await persistPipelineState();
+  try {
+    const r = await pushNow();
+    log(`  · 推送成功: ${r.total} 条`);
+  } catch (e) {
+    // 推送失败不致命 — 打分已存,可以手动重推
+    log(`  ⚠ 推送失败: ${e.message}`);
+  }
+  return await finalizePipelineRun(run, 'done');
+}
+
+async function transitionTo(run, nextStage) {
+  run.stage = nextStage;
+  run.stageStartedAt = Date.now();
+  await setPipelineRun(run);
+  return await scheduleAdvance(500);
+}
+
+async function finalizePipelineRun(run, finalStage) {
+  run.stage = finalStage;
+  await setPipelineRun(run);
+  pipelineState.stage = finalStage === 'done' ? 'done' : (finalStage === 'stopped' ? 'idle' : finalStage);
+  pipelineState.substep = finalStage === 'done' ? '完成' : (finalStage === 'stopped' ? '已停止' : '出错');
+  await persistPipelineState();
+  log(`✓ 流水线 ${finalStage}`);
+  chrome.runtime.sendMessage({ type: 'pipeline_progress', stage: finalStage }).catch(() => {});
+
+  // 30 秒后清理(让 popup 有时间看到 done 状态)
+  setTimeout(async () => {
+    const cur = await getPipelineRun();
+    if (cur && cur.id === run.id) await clearPipelineRun();
+    if (pipelineState.stage === 'done' || pipelineState.stage === 'error') {
+      pipelineState.stage = 'idle';
+      await persistPipelineState();
+    }
+  }, 30000);
+}
+
+// SW boot 恢复
+async function reconcileActiveRunOnBoot() {
+  const run = await getPipelineRun();
+  if (!run) return;
+  if (TERMINAL_STAGES.has(run.stage)) return;
+  const sinceHeartbeat = Date.now() - (run.heartbeat || 0);
+  log(`⏯ 检测到未完成 run ${run.id} stage=${run.stage}, 上次心跳 ${Math.round(sinceHeartbeat/1000)}s 前`);
+
+  // 清理 stuck 'running' 任务 — SW 死时正在跑的任务会卡在 running,标回 pending
+  if (run.stage === 'crawl') {
+    const q = await getTaskQueue();
+    if (q && q.tasks) {
+      let recovered = 0;
+      for (const t of q.tasks) {
+        if (t.status === 'running') { t.status = 'pending'; recovered++; }
+      }
+      if (recovered > 0) {
+        await setTaskQueue(q);
+        log(`  ⏯ 重置 ${recovered} 个卡在 running 的任务`);
+      }
+    }
+  }
+
+  // 同步到内存 pipelineState
+  const stageMap = { crawl: 'crawling', score: 'scoring', push: 'pushing' };
+  pipelineState.stage = stageMap[run.stage] || 'idle';
+  pipelineState.startedAt = run.startedAt;
+  pipelineState.stageStartedAt = run.stageStartedAt;
+  pipelineState.crawl = pipelineState.crawl || { tasksDone: 0, tasksTotal: 0, jobsAdded: 0, currentTask: '' };
+  pipelineState.score = pipelineState.score || { done: 0, total: 0 };
+
+  // 直接 schedule 推进(不要 await — 让 SW boot 路径快速返回)
+  scheduleAdvance(1000).catch(() => {});
+}
+
+// 旧 API 保留,内部转给新状态机
+async function runPipeline(config) {
+  await startPipelineRun(config);
 }

@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Boss采集 v2 矩阵版</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    width: 460px;
+    max-height: 640px;
+    margin: 0;
+    padding: 12px;
+    font: 13px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: #222;
+    background: #fafafa;
+    overflow-y: auto;
+  }
+  h3 {
+    margin: 0;
+    font-size: 14px;
+    color: #1d3557;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .subtitle { font-size: 11px; color: #888; margin: 2px 0 10px; }
+  .badge {
+    font-size: 11px;
+    background: #1d3557;
+    color: #fff;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-weight: normal;
+  }
+  label { font-size: 12px; color: #555; }
+  input[type=number], input[type=text], select {
+    width: 100%;
+    padding: 5px 7px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 12px;
+    background: #fff;
+  }
+  .tabs { display: flex; border-bottom: 1px solid #ddd; margin-bottom: 10px; }
+  .tab {
+    padding: 6px 14px;
+    cursor: pointer;
+    font-size: 12px;
+    color: #666;
+    border-bottom: 2px solid transparent;
+  }
+  .tab.active {
+    color: #1d3557;
+    border-bottom-color: #1d3557;
+    font-weight: 600;
+  }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  .tree {
+    max-height: 240px;
+    overflow-y: auto;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    background: #fff;
+    padding: 4px;
+    font-size: 12px;
+  }
+  .tree-l1 {
+    background: #f0f4f8;
+    padding: 4px 6px;
+    margin: 4px 0 2px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-weight: 600;
+    color: #1d3557;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .tree-l1 .count {
+    font-weight: normal;
+    font-size: 10px;
+    color: #999;
+    margin-left: auto;
+  }
+  .tree-l2-wrap { padding-left: 16px; display: none; }
+  .tree-l2-wrap.open { display: block; }
+  .tree-l2 {
+    padding: 2px 4px;
+    cursor: pointer;
+    color: #444;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .tree-l2:hover { background: #f5f9fc; }
+  .tree-l3-wrap { padding-left: 14px; display: none; }
+  .tree-l3-wrap.open { display: block; }
+  .tree-l3 { padding: 1px 4px; color: #666; font-size: 11px; }
+  .tree-l3 label { font-size: 11px; cursor: pointer; }
+  .tree input[type=checkbox] { margin: 0 4px 0 0; vertical-align: middle; }
+  .toggle-arrow {
+    display: inline-block;
+    width: 10px;
+    color: #999;
+    font-size: 9px;
+    transition: transform .2s;
+  }
+  .toggle-arrow.open { transform: rotate(90deg); }
+  .city-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 2px;
+    margin-top: 4px;
+    max-height: 110px;
+    overflow-y: auto;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    padding: 6px;
+    background: #fff;
+  }
+  .city-grid label {
+    font-size: 11px;
+    padding: 2px;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .row { display: flex; gap: 6px; margin-top: 6px; }
+  .row > div { flex: 1; }
+  .row label { display: block; margin-bottom: 2px; }
+  .sel-summary {
+    margin: 8px 0;
+    padding: 6px 8px;
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    font-size: 12px;
+  }
+  .sel-summary .num { color: #c33; font-weight: 600; }
+  .sel-summary .est { color: #888; font-size: 11px; margin-left: 8px; }
+  .btns { display: flex; gap: 6px; margin-top: 10px; }
+  button {
+    flex: 1;
+    padding: 7px 0;
+    border: none;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    color: #fff;
+    background: #1d3557;
+  }
+  button.gray { background: #888; }
+  button.red { background: #c33; }
+  button.green { background: #2a9d4a; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.small { font-size: 11px; padding: 4px 8px; flex: 0; }
+  .stats {
+    margin-top: 6px;
+    padding: 6px 8px;
+    background: #fff;
+    border: 1px solid #eee;
+    border-radius: 4px;
+    font-size: 12px;
+    display: flex;
+    justify-content: space-between;
+  }
+  .stats b { color: #1d3557; }
+  #log {
+    margin-top: 8px;
+    padding: 8px;
+    height: 130px;
+    overflow-y: auto;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    border-radius: 4px;
+    font: 11px/1.4 ui-monospace, Menlo, monospace;
+    white-space: pre-wrap;
+  }
+  .hint {
+    margin-top: 6px;
+    padding: 6px 8px;
+    background: #fffbea;
+    border-left: 3px solid #f0c040;
+    border-radius: 3px;
+    font-size: 11px;
+    color: #885500;
+  }
+  .quick-filter { width: 100%; margin-bottom: 4px; font-size: 11px; padding: 4px 6px; }
+  .queue-list {
+    max-height: 240px;
+    overflow-y: auto;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    background: #fff;
+    font-size: 11px;
+  }
+  .queue-row {
+    padding: 3px 6px;
+    border-bottom: 1px solid #f0f0f0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .queue-row:last-child { border-bottom: 0; }
+  .queue-status {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 2px;
+    color: #fff;
+  }
+  .qs-pending { background: #999; }
+  .qs-running { background: #f0a040; }
+  .qs-done { background: #2a9d4a; }
+  .qs-failed { background: #c33; }
+  .qs-failed_skipped { background: #663366; }
+</style>
+</head>
+<body>
+
+<h3>
+  Boss 采集 v2 矩阵版
+  <span class="badge" id="state">空闲</span>
+</h3>
+<div class="subtitle">三级职位树 · 多城市矩阵 · 断点续跑</div>
+
+<div class="tabs">
+  <div class="tab active" data-panel="config">配置</div>
+  <div class="tab" data-panel="queue">任务队列</div>
+  <div class="tab" data-panel="run">运行</div>
+</div>
+
+<div class="panel active" id="panel-config">
+
+  <label>① 职位类型(三级,可按大类/二级一键全选)</label>
+  <input class="quick-filter" id="qfPos" placeholder="搜索职位名(如: Java / 数据 / 算法)">
+  <div class="tree" id="positionTree">加载中...</div>
+  <div style="font-size:11px;color:#888;margin:4px 0">
+    已选职位: <b id="selPosCount" style="color:#c33">0</b> 个
+    <button class="small gray" id="clearPos" style="float:right;margin-left:4px">清空职位</button>
+  </div>
+
+  <label style="margin-top:8px;display:block">② 城市(多选)</label>
+  <input class="quick-filter" id="qfCity" placeholder="搜索城市">
+  <div class="city-grid" id="cityGrid"></div>
+  <div style="font-size:11px;color:#888;margin-top:2px">
+    已选城市: <b id="selCityCount" style="color:#c33">0</b> 个
+    <button class="small gray" id="clearCity" style="float:right">清空城市</button>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>③ 工作经验</label>
+      <select id="filterExp"><option value="">不限</option></select>
+    </div>
+    <div>
+      <label>④ 学历</label>
+      <select id="filterDeg"><option value="">不限</option></select>
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>排序方式</label>
+      <select id="sortMode">
+        <option value="comprehensive">综合排序</option>
+        <option value="newest" selected>最新发布</option>
+      </select>
+    </div>
+    <div>
+      <label>运行模式</label>
+      <select id="runMode">
+        <option value="window_isolated">独立窗口(最小化)</option>
+        <option value="tab_visible">当前窗口可见</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>每词最多滚动</label>
+      <input type="number" id="maxScrolls" value="15" min="1" max="50">
+    </div>
+    <div>
+      <label>总条数上限</label>
+      <input type="number" id="maxTotal" value="0" min="0">
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>页内停留下限</label>
+      <input type="number" id="dwellMin" value="2" min="1" step="0.5">
+    </div>
+    <div>
+      <label>页内停留上限</label>
+      <input type="number" id="dwellMax" value="5" min="2" step="0.5">
+    </div>
+    <div>
+      <label>任务间下限</label>
+      <input type="number" id="gapMin" value="10" min="3">
+    </div>
+    <div>
+      <label>任务间上限</label>
+      <input type="number" id="gapMax" value="25" min="5">
+    </div>
+  </div>
+
+  <div class="sel-summary">
+    任务组合数: <span class="num" id="comboCount">0</span>
+    <span class="est" id="comboEst"></span>
+  </div>
+
+  <div class="btns">
+    <button id="genQueue" class="green">生成任务队列</button>
+  </div>
+</div>
+
+<div class="panel" id="panel-queue">
+  <div class="stats">
+    <span>总: <b id="qTotal">0</b></span>
+    <span>完成: <b id="qDone" style="color:#2a9d4a">0</b></span>
+    <span>失败: <b id="qFail" style="color:#c33">0</b></span>
+    <span>待跑: <b id="qPending" style="color:#666">0</b></span>
+  </div>
+  <div class="queue-list" id="queueList" style="margin-top:8px">(尚未生成队列)</div>
+  <div class="btns">
+    <button id="exportQueueState" class="gray small">导出队列状态</button>
+    <button id="clearQueue" class="red small">清空队列</button>
+  </div>
+</div>
+
+<div class="panel" id="panel-run">
+  <div class="stats">
+    <span>数据池: <b id="total">—</b></span>
+    <span id="progress" style="color:#666"></span>
+  </div>
+  <div class="btns">
+    <button id="start" class="green">开始</button>
+    <button id="resume" class="green">续跑</button>
+    <button id="stop" class="red" disabled>停止</button>
+  </div>
+  <div class="btns">
+    <button id="exportJobRadar" class="green">导出 job-radar JSON</button>
+    <button id="export" class="gray">导出 CSV</button>
+    <button id="clear" class="gray">清空数据池</button>
+  </div>
+  <div id="log"></div>
+  <div class="hint">
+    生成任务队列后点"开始"。中途停 → 下次点"续跑"从断点继续。建议保持本弹窗打开。
+  </div>
+</div>
+
+<script src="popup.js"></script>
+</body>
+</html>

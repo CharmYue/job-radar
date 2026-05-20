@@ -2,26 +2,35 @@
 
 个人求职雷达 —— 自动抓 ATS 岗位 + Boss直聘,用 LLM 按你的简历打分,每天一份 Markdown 摘要推到微信。
 
-> 私人项目,假设你是 AI Solution Engineer / Customer Engineer 方向。`/boss` 命令依赖 Claude Code + claude-in-chrome 浏览器扩展。
+> 私人项目,假设你是 AI Solution Engineer / Customer Engineer 方向。Boss 部分依赖随仓库附带的 Chrome 扩展(`extension/`)。
 
 ## 它做什么
 
 1. **早 6:30(launchd 定时)**:抓取配置好的 Greenhouse / Lever / SmartRecruiters / Workday 接口 + 一轮 Brave Search → 城市/角色预筛 → DeepSeek V4 拿你的 `data/resume.md` + `config/profile.yaml` 打分 → 推送精简报告到微信。
-2. **下午 17:00(launchd 定时)**:微信推送提醒你跑 `/boss`。
-3. **手动 `/boss`(Claude Code)**:让 claude-in-chrome 驱动你已登录的 Chrome 跑 18 次 Boss 搜索(6 query × 3 城市),解码 webfont 混淆的薪资,按你的 `target_monthly_min` 过滤,打分,推送。
+2. **下午 17:00(launchd 定时)**:微信推送提醒你打开 Boss 采集扩展。
+3. **Boss 采集(手动 + Chrome 扩展)**:浏览器扩展猴补丁 `window.fetch`,**只观察 Boss 自家 JS 发的 `/joblist.json` 返回 JSON**,拿原始 22 字段(包括未混淆的 `salaryDesc`、公司规模、福利、HR 活跃度);跑完一键导出 `boss_<日期>.json`,喂给 `run_daily.py --import` 走和 ATS 一样的打分 / 推送链路。
 
 每跑一次会在 SQLite 留一条 30 天去重记录,完整报告写到 `data/report_<日期>.md`。
+
+## 为什么不直接 Playwright + 模拟抓 API
+
+试过,Boss 风控很严:
+- Headless Playwright 几乎当场被识别
+- 即使带真实 cookie,直接调 `/joblist.json` 一两次就 `code=37` 风控拉黑
+- 列表页 DOM 里薪资被 `kanzhun-mix` webfont 混淆,看到的是 `-K·薪` 这种鬼东西
+
+现在的扩展方案:**注入到主世界,只拦截 Boss 前端自己发的请求**,所有签名 / token / 浏览器指纹是真实用户级别,风控难度直接降一个数量级,而且能拿原始 JSON。
 
 ## 前置条件
 
 - **macOS**(Linux 也行,把 launchd 换成 cron / systemd)
 - **Python 3.11+** 加 [uv](https://docs.astral.sh/uv/)
-- API 账号(部分免费部分付费):
+- **Chrome** + 仓库里的 `extension/` 加载为开发者模式扩展
+- API 账号:
   - **DeepSeek V4** —— 主打分模型([deepseek.com](https://platform.deepseek.com))
-  - **Azure OpenAI** —— 可选的 fallback
+  - **Azure OpenAI** —— 可选 fallback
   - **WxPusher** —— 免费,微信推送通道([wxpusher.zjiecode.com](https://wxpusher.zjiecode.com))
   - **Brave Search** —— 免费 tier([brave.com/search/api](https://brave.com/search/api/))
-- 仅 `/boss` 流程需要:**Claude Code** + **claude-in-chrome** 浏览器扩展 + 一个已登录 Boss直聘 的 Chrome
 
 ## 安装
 
@@ -44,7 +53,10 @@ $EDITOR data/resume.md                  # 粘贴完整简历(Markdown 即可)
 # 4. (可选)ATS 目标公司
 $EDITOR config/ats_targets.yaml         # Greenhouse / Lever 等的公司 slug
 
-# 5. Dry-run 验证 — 用仓库自带的 sample
+# 5. 安装 Chrome 扩展(详见 docs/extension.md)
+#    chrome://extensions/ → 开发者模式 → 加载已解压扩展 → 选 extension/ 目录
+
+# 6. Dry-run 验证 — 用仓库自带 sample
 uv run python scripts/run_daily.py --import data/sample_jobs.json --dry-run
 ```
 
@@ -64,15 +76,17 @@ launchctl load -w ~/Library/LaunchAgents/com.jobradar.bossreminder.plist
 
 跑完看 `data/daily_out.log` / `data/jobradar.log`。完整报告在 `data/report_<日期>.md`,SQLite 去重库是 `data/jobs.db`。
 
-## Boss直聘 流程(手动,经由 Claude Code)
+## Boss 采集(手动)
 
-早 6:30 的自动任务**故意跳过 Boss** —— 无人值守抓 Boss 几乎必封号。Boss 必须走你已登录的 Chrome,通过 claude-in-chrome:
+详见 [docs/extension.md](docs/extension.md)。简化版流程:
 
-1. 复制 `docs/boss-command.md` → `~/.claude/commands/boss.md`
-2. 在 Claude Code 里,Chrome 打开任一 Boss 搜索页,输入 `/boss`
-3. Claude 跑 18 次 navigate + 提取,解码 `kanzhun-mix` webfont 还原薪资,按 `target_monthly_min` 过滤,写 JSON,跑 `run_daily.py --import`,推送报告
+1. Chrome 里登录 zhipin.com
+2. 点工具栏的 **Boss 采集** 扩展图标
+3. 勾职位 + 城市,生成任务队列,点**开始**
+4. 跑完点 **导出 job-radar JSON** → 保存到 `~/job-radar/data/`
+5. 终端:`uv run python scripts/run_daily.py --import data/boss_<日期>.json`
 
-整轮 5-10 分钟。Boss 弹验证码的时候别跑。
+整个流程 10-15 分钟(取决于多少关键词)。Boss 弹验证码或风控时扩展会自动停,2-4 小时后再试。
 
 ## 仓库结构
 
@@ -88,16 +102,24 @@ src/job_radar/
 
 scripts/
   run_daily.py     # 主入口:--import | --ats-only | --dry-run | --no-dedup
-  push_reminder.py # 17:00 微信戳一下提醒跑 /boss
-  import_chrome_cookies.py  # (旧)Playwright 抓 Boss 时的 cookie 导入,已弃用
+  push_reminder.py # 17:00 微信戳一下提醒打开 Boss 采集扩展
+  debug_push.py    # WxPusher 推送测试
 
 config/
   profile.example.yaml      # 模板 — copy 成 profile.yaml 再填
   ats_targets.yaml          # 要查的公司 slug 清单
 
+extension/                  # Boss 采集 Chrome 扩展(MV3)
+  manifest.json
+  injected.js               # 主世界,猴补丁 fetch / XHR
+  content.js                # 隔离世界,转发数据 + 行为模拟
+  background.js             # SW 编排器,任务队列 + 风控感知 + 导出
+  popup.html / popup.js     # UI
+  dict.json                 # Boss 职位 / 城市 / 行业 三级 taxonomy
+
 launchd/                    # macOS 定时任务模板(load 前替换 __HOME__)
 docs/
-  boss-command.md           # /boss slash command 定义
+  extension.md              # 扩展安装 + 使用细节
 data/
   sample_jobs.json          # demo 输入 — 可以 commit
   resume.md                 # 你的简历(gitignored)
@@ -107,9 +129,9 @@ data/
 
 ## 已知限制
 
-- **Boss webfont 映射**:`codepoint - 57393 = 数字` 这条规则对应当前 `kanzhun-mix` 字体。如果 Boss 换字体,需要下载新的 woff2 用 fonttools 看 `cmap` 重建映射。
-- **英文 Boss query**(Solution Engineer / Customer Engineer)命中量非常少,主要靠中文 query(解决方案工程师 / AI 解决方案)出量。
-- **Boss session 会过期**:Chrome 里定期重新扫码登录一次。
+- **扩展依赖 DOM 选择器**:Boss 改前端时 `.job-card-wrapper` 这种可能失效,需要在 `extension/content.js` 改 `SELECTORS` 数组。
+- **API 字段重命名**:Boss 偶尔改字段名(如 `salaryDesc` → `salary`),看 Network 实际 JSON 然后改 `extension/background.js normalize()`。
+- **Boss session 会过期**:Chrome 里定期重新扫码登录。
 - **launchd 不展开 `$HOME`**:示例 plist 用 `__HOME__` 占位,load 前必须替换。
 - **个人数据**:`config/profile.yaml`、`data/resume.md`、`data/*.json`、`data/*.md`、`data/boss_state.json`、`data/jobs.db` 都在 `.gitignore` 里。第一次 commit 前再 `git status` 过一眼最稳。
 

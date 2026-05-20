@@ -11,6 +11,7 @@ data/*.log
 data/*.json
 data/*.md
 data/*.png
+data/*.csv
 # Boss session cookies (sensitive)
 data/boss_state.json
 

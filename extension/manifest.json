@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "Boss直聘采集助手 v2 - 矩阵版",
+  "version": "2.0.0",
+  "description": "三级职位树 + 多城市 + 经验/学历筛选,批量遍历采集,自动断点续跑。",
+  "permissions": [
+    "storage",
+    "downloads",
+    "tabs",
+    "scripting",
+    "windows",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://www.zhipin.com/*",
+    "https://*.zhipin.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Boss采集 v2"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.zhipin.com/web/geek/job*"],
+      "js": ["injected.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://www.zhipin.com/web/geek/job*"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["dict.json"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  }
+}

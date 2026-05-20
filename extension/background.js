@@ -2332,6 +2332,9 @@ async function startPipelineRun(config) {
   if (existing && !TERMINAL_STAGES.has(existing.stage)) {
     throw new Error(`流水线已在跑 (stage=${existing.stage}),先停止再启动`);
   }
+  // 清掉前一次 run 排着的 cleanup alarm — 否则它 30s 后触发会把当前新 run 的终态记录擦了
+  try { await chrome.alarms.clear(ALARM_CLEANUP); } catch (e) {}
+  await chrome.storage.local.remove('pendingCleanupRunId');
 
   const tasks = (config && config.tasks) || [];
   // 建 taskQueue
@@ -2575,6 +2578,7 @@ const ALARM_CLEANUP = 'finalize-cleanup-pipeline-run';
 
 async function finalizePipelineRun(run, finalStage) {
   run.stage = finalStage;
+  run.finishedAt = Date.now();
   await setPipelineRun(run);
   pipelineState.stage = finalStage === 'done' ? 'done' : (finalStage === 'stopped' ? 'idle' : finalStage);
   pipelineState.substep = finalStage === 'done' ? '完成' : (finalStage === 'stopped' ? '已停止' : '出错');
@@ -2587,13 +2591,19 @@ async function finalizePipelineRun(run, finalStage) {
   _advanceFireAt = 0;
   try { await chrome.alarms.clear(ALARM_ADVANCE); } catch (e) {}
 
-  // 30 秒后清掉 pipelineRun — 用 alarm 而非 setTimeout,SW 死了也能清
+  // 记下当前 run.id,30 秒后清理 alarm 触发时拿这个 id 校验 — 不会误清后续 run
+  await chrome.storage.local.set({ pendingCleanupRunId: run.id });
   chrome.alarms.create(ALARM_CLEANUP, { when: Date.now() + 30 * 1000 });
 }
 
 async function handleCleanupAlarm() {
+  const expected = (await chrome.storage.local.get('pendingCleanupRunId')).pendingCleanupRunId;
   const cur = await getPipelineRun();
-  if (cur && TERMINAL_STAGES.has(cur.stage)) await clearPipelineRun();
+  // 校验 run.id — 若 storage 里已是另一个 run(用户开了新 run),老 cleanup 不动它
+  if (cur && cur.id === expected && TERMINAL_STAGES.has(cur.stage)) {
+    await clearPipelineRun();
+  }
+  await chrome.storage.local.remove('pendingCleanupRunId');
   if (pipelineState.stage === 'done' || pipelineState.stage === 'error') {
     pipelineState.stage = 'idle';
     await persistPipelineState();

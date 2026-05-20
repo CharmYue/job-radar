@@ -126,35 +126,187 @@ function progressLine() {
   return `[${c}/${t} | R${p}]`;
 }
 
-async function getJobsMap() {
-  return (await chrome.storage.local.get('jobs')).jobs || {};
-}
-async function setJobsMap(m) {
-  await chrome.storage.local.set({ jobs: m });
+// ============================================================
+// IndexedDB jobs store (#3 完整版)
+// ------------------------------------------------------------
+// 取代 chrome.storage.local.jobs 单 key 巨型对象,解决:
+//   (1) 全图 race — 并发 intercept/score 互相覆盖
+//   (2) Quota — 10MB 限制,3-5K/条 → 几千条就爆
+//   (3) 查询慢 — O(n) JSON 反序列化
+// 设计:
+//   - 主键 job_id;索引 score_priority / crawl_time_ts / user_marked / company_name
+//   - 单条 atomic 更新(IDB 事务保证)
+//   - 兼容层 getJobsMap()/setJobsMap() 保留旧 API,新代码用 jobsPut/jobsGet 等
+// ============================================================
+const IDB_NAME = 'boss_radar';
+const IDB_VERSION = 1;
+const STORE_JOBS = 'jobs';
+
+let _idbPromise = null;
+function openIdb() {
+  if (_idbPromise) return _idbPromise;
+  _idbPromise = new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+    req.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(STORE_JOBS)) {
+        const store = db.createObjectStore(STORE_JOBS, { keyPath: 'job_id' });
+        store.createIndex('score_priority', 'score_priority', { unique: false });
+        store.createIndex('crawl_time_ts', 'crawl_time_ts', { unique: false });
+        store.createIndex('user_marked', 'user_marked', { unique: false });
+        store.createIndex('company_name', 'company_name', { unique: false });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  return _idbPromise;
 }
 
-// #3 lite: 留存修剪 — 防止 jobs map 无限增长
-// 默认保留 30 天内的 + 标记 applied 的(用户在跟进的留住)
+function idbReq(req) {
+  return new Promise((resolve, reject) => {
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// 在 put 之前算 crawl_time_ts 用于索引(crawl_time 是 "YYYY-MM-DD HH:MM:SS" 字符串)
+function normalizeForIdb(job) {
+  if (!job.crawl_time_ts && job.crawl_time) {
+    const ts = Date.parse(job.crawl_time.replace(' ', 'T'));
+    if (!isNaN(ts)) job.crawl_time_ts = ts;
+  }
+  // 索引字段不能是 undefined,补默认值
+  if (job.score_priority === undefined) job.score_priority = '';
+  if (job.user_marked === undefined) job.user_marked = '';
+  if (job.company_name === undefined) job.company_name = '';
+  return job;
+}
+
+async function jobsPut(job) {
+  if (!job || !job.job_id) throw new Error('jobsPut: 需要 job_id');
+  const db = await openIdb();
+  const tx = db.transaction(STORE_JOBS, 'readwrite');
+  await idbReq(tx.objectStore(STORE_JOBS).put(normalizeForIdb(job)));
+  await new Promise((r) => { tx.oncomplete = r; });
+}
+
+async function jobsGet(jobId) {
+  const db = await openIdb();
+  return idbReq(db.transaction(STORE_JOBS, 'readonly').objectStore(STORE_JOBS).get(jobId));
+}
+
+async function jobsDelete(jobId) {
+  const db = await openIdb();
+  const tx = db.transaction(STORE_JOBS, 'readwrite');
+  await idbReq(tx.objectStore(STORE_JOBS).delete(jobId));
+  await new Promise((r) => { tx.oncomplete = r; });
+}
+
+async function jobsBulkPut(jobs) {
+  if (!Array.isArray(jobs) || jobs.length === 0) return 0;
+  const db = await openIdb();
+  const tx = db.transaction(STORE_JOBS, 'readwrite');
+  const store = tx.objectStore(STORE_JOBS);
+  for (const j of jobs) {
+    if (j && j.job_id) store.put(normalizeForIdb(j));
+  }
+  await new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  return jobs.length;
+}
+
+async function jobsListAll() {
+  const db = await openIdb();
+  return idbReq(db.transaction(STORE_JOBS, 'readonly').objectStore(STORE_JOBS).getAll());
+}
+
+async function jobsCount() {
+  const db = await openIdb();
+  return idbReq(db.transaction(STORE_JOBS, 'readonly').objectStore(STORE_JOBS).count());
+}
+
+// 原子 read-modify-write — 防 race
+async function jobsUpdate(jobId, mutator) {
+  const db = await openIdb();
+  const tx = db.transaction(STORE_JOBS, 'readwrite');
+  const store = tx.objectStore(STORE_JOBS);
+  const cur = await idbReq(store.get(jobId));
+  if (!cur) {
+    await new Promise((r) => { tx.oncomplete = r; });
+    return null;
+  }
+  const next = mutator(cur);
+  if (next) await idbReq(store.put(normalizeForIdb(next)));
+  await new Promise((r) => { tx.oncomplete = r; });
+  return next;
+}
+
+// ============================================================
+// 兼容层:旧代码用 map,新代码可以用 jobsPut 直接落单条
+// ============================================================
+async function getJobsMap() {
+  const arr = await jobsListAll();
+  const map = {};
+  for (const j of arr) map[j.job_id] = j;
+  return map;
+}
+async function setJobsMap(m) {
+  // 注意:这是替换语义 — IDB 当前内容 + map 合并,不存在于 map 的会被删
+  // (老 chrome.storage 语义就是整体覆盖)
+  const arr = Object.values(m || {});
+  await jobsBulkPut(arr);
+  // 删除 map 里没有的(回头如果发现性能问题,可以让 caller 显式调 jobsDelete)
+  const existing = await jobsListAll();
+  const keep = new Set(arr.map((j) => j.job_id));
+  for (const j of existing) {
+    if (!keep.has(j.job_id)) await jobsDelete(j.job_id);
+  }
+}
+
+// ============================================================
+// 旧 chrome.storage.local.jobs → IDB 一次性迁移
+// ============================================================
+async function migrateChromeStorageToIdb() {
+  const flag = (await chrome.storage.local.get('idb_migrated_v1')).idb_migrated_v1;
+  if (flag) return;
+  const oldJobs = (await chrome.storage.local.get('jobs')).jobs;
+  if (oldJobs && typeof oldJobs === 'object') {
+    const arr = Object.values(oldJobs);
+    if (arr.length > 0) {
+      await jobsBulkPut(arr);
+      log(`✓ 迁移 ${arr.length} 条 jobs 到 IndexedDB`);
+    }
+    // 删除旧 key 释放 chrome.storage quota
+    await chrome.storage.local.remove('jobs');
+  }
+  await chrome.storage.local.set({ idb_migrated_v1: true });
+}
+
+// 留存修剪
 const JOBS_KEEP_DAYS = 30;
 async function pruneOldJobs(opts = {}) {
   const keepDays = opts.keepDays || JOBS_KEEP_DAYS;
   const cutoff = Date.now() - keepDays * 24 * 3600 * 1000;
-  const jobs = await getJobsMap();
+  const all = await jobsListAll();
   let pruned = 0;
-  for (const k of Object.keys(jobs)) {
-    const item = jobs[k];
-    if (item.user_marked === 'applied') continue;  // 投了的留着
-    const ts = Date.parse((item.crawl_time || '').replace(' ', 'T')) || 0;
+  const db = await openIdb();
+  const tx = db.transaction(STORE_JOBS, 'readwrite');
+  const store = tx.objectStore(STORE_JOBS);
+  for (const item of all) {
+    if (item.user_marked === 'applied') continue;
+    const ts = item.crawl_time_ts || Date.parse((item.crawl_time || '').replace(' ', 'T')) || 0;
     if (ts && ts < cutoff) {
-      delete jobs[k];
+      store.delete(item.job_id);
       pruned++;
     }
   }
-  if (pruned > 0) {
-    await setJobsMap(jobs);
-    log(`✓ 修剪 ${pruned} 条 ${keepDays}+ 天前的旧岗位`);
-  }
-  return { pruned, remaining: Object.keys(jobs).length };
+  await new Promise((resolve) => { tx.oncomplete = resolve; });
+  if (pruned > 0) log(`✓ 修剪 ${pruned} 条 ${keepDays}+ 天前的旧岗位`);
+  const remaining = await jobsCount();
+  return { pruned, remaining };
 }
 
 // #1 lite: pipelineState 持久化 — SW 被 Chrome 杀掉后,
@@ -201,9 +353,12 @@ async function reconcileStaleRunOnBoot() {
 chrome.alarms.create('keepalive', { periodInMinutes: 0.5 });
 chrome.alarms.create('daily-auto-pipeline', { periodInMinutes: 30 });
 
-// SW 启动时检查上次跑是否被中断 + 修剪老岗位
-reconcileStaleRunOnBoot().catch(() => {});
-pruneOldJobs().catch(() => {});
+// SW 启动顺序:迁 IDB → 检查上次跑 → 修剪旧岗
+(async () => {
+  try { await migrateChromeStorageToIdb(); } catch (e) { console.warn('[boot] idb migrate', e); }
+  try { await reconcileStaleRunOnBoot(); } catch (e) { console.warn('[boot] reconcile', e); }
+  try { await pruneOldJobs(); } catch (e) { console.warn('[boot] prune', e); }
+})();
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'keepalive') return; // noop,只为保活
   if (alarm.name === 'daily-auto-pipeline') {
@@ -648,27 +803,30 @@ async function handleIntercepted(payload, url) {
   // 屏蔽公司(company_id 黑名单)
   const blocked = await getBlocked();
 
-  const jobs = await getJobsMap();
+  // 不读全图:每条单独 jobsGet 检查是否存在,然后 bulkPut 新加的
   let added = 0;
   let filtered = 0;
   let blockedCount = 0;
+  const toAdd = [];
   for (const raw of list) {
     const item = normalize(raw, pendingContext);
-    if (!item.job_id || jobs[item.job_id]) continue;
+    if (!item.job_id) continue;
+    const existing = await jobsGet(item.job_id);
+    if (existing) continue;  // 已存在,跳过(避免覆盖 score 字段)
     if (item.company_id && blocked[item.company_id]) { blockedCount++; continue; }
     if (companyTokens.length > 0) {
       const brand = (item.company_name || '').toLowerCase();
       const matched = companyTokens.some((t) => brand.indexOf(t) !== -1);
       if (!matched) { filtered++; continue; }
     }
-    jobs[item.job_id] = item;
+    toAdd.push(item);
     added++;
     if (state.config && state.config.maxTotal > 0 &&
         state.added + added >= state.config.maxTotal) {
       break;
     }
   }
-  await setJobsMap(jobs);
+  if (toAdd.length > 0) await jobsBulkPut(toAdd);
   state.added += added;
 
   const flt = filtered > 0 ? ` 公司过滤 -${filtered}` : '';
@@ -736,11 +894,12 @@ async function handleDetailIntercepted(payload) {
     // 兜底:先到先服务
     pendingDetailFallback.shift().resolve(info);
   }
-  // 同时直接 merge 到 jobsMap(以防 waiter 没接到)
-  const jobs = await getJobsMap();
-  if (jid && jobs[jid]) {
-    mergeDetailIntoJob(jobs[jid], info);
-    await setJobsMap(jobs);
+  // 原子 read-modify-write 单条,避免并发详情互相覆盖
+  if (jid) {
+    await jobsUpdate(jid, (cur) => {
+      mergeDetailIntoJob(cur, info);
+      return cur;
+    });
   }
 }
 
@@ -1891,42 +2050,35 @@ async function scoreAllUnscored() {
   let stoppedAt = 0;
   log(`▶ 开始打分: ${targetKeys.length} 条未打分(共 ${allKeys.length})`);
 
-  // 每 N 条增量落盘,避免崩了全丢
-  const PERSIST_EVERY = 10;
-  let sinceLastPersist = 0;
-  const persistMaybe = async (force = false) => {
-    sinceLastPersist++;
-    if (force || sinceLastPersist >= PERSIST_EVERY) {
-      sinceLastPersist = 0;
-      await setJobsMap(jobsMap);
-    }
-  };
-
   const tasks = targetKeys.map((k) => async () => {
-    // 关键:每条进 LLM 前先检查 stop
     if (pipelineState.shouldStop) {
       stoppedAt++;
       return { stopped: true };
     }
     const item = jobsMap[k];
     const job = jobToScoreInput(item);
+    let scored = null;
     try {
       const raw = await callLLM(buildScoringMessages(job, profile), activeProvider, providerConfig);
-      const r = parseScoreReply(raw);
-      item.score = r.score;
-      item.score_priority = r.priority;
-      item.score_reason = r.reason;
-      item.score_concerns = r.concerns;
-      item.score_pitch = r.pitch || '';
-      item.score_resume_version = r.resume_version || '';
-      item.score_fingerprint = makeScoreFingerprint(profile, activeProvider, providerConfig.model, item);
-      item.score_at = Date.now();
+      scored = parseScoreReply(raw);
       progress++;
     } catch (e) {
       failed++;
       log(`  ✗ 打分失败 [${item.job_name || k}]: ${e.message}`);
       return { error: e.message };
     }
+    // 单条原子写 IDB(无 race) — 比批量整图写省事 + 抗 crash
+    await jobsUpdate(k, (cur) => {
+      cur.score = scored.score;
+      cur.score_priority = scored.priority;
+      cur.score_reason = scored.reason;
+      cur.score_concerns = scored.concerns;
+      cur.score_pitch = scored.pitch || '';
+      cur.score_resume_version = scored.resume_version || '';
+      cur.score_fingerprint = makeScoreFingerprint(profile, activeProvider, providerConfig.model, cur);
+      cur.score_at = Date.now();
+      return cur;
+    });
     pipelineState.score = { done: progress, total: targetKeys.length, failed };
     pipelineState.substep = `打分 ${progress}/${targetKeys.length}${failed ? ` (失败 ${failed})` : ''} · ${item.job_name || ''}`.slice(0, 80);
     chrome.runtime.sendMessage({
@@ -1935,13 +2087,11 @@ async function scoreAllUnscored() {
       total: targetKeys.length,
       failed,
     }).catch(() => {});
-    await persistMaybe();
-    persistPipelineState().catch(() => {});  // 心跳
+    persistPipelineState().catch(() => {});
     return true;
   });
 
   await withConcurrency(tasks, 3);
-  await persistMaybe(true);  // 最后强制 flush
   const msg = `✓ 打分完成: 成功 ${progress} / 失败 ${failed}${stoppedAt ? ` / 中止 ${stoppedAt}` : ''}`;
   log(msg);
   return { scored: progress, failed, stopped: stoppedAt, skipped: allKeys.length - targetKeys.length };

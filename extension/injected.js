@@ -17,7 +17,11 @@
 
   const FLAG = '__BOSS_FINAL_DATA__';
   const READY = '__BOSS_FINAL_READY__';
-  const TARGETS = ['/joblist.json', '/search/joblist'];
+  const TARGETS = [
+    '/joblist.json',
+    '/search/joblist',
+    '/wapi/zpgeek/job/detail.json',  // 详情(深度抓取)
+  ];
 
   function isTarget(url) {
     if (!url) return false;

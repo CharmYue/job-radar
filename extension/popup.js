@@ -792,6 +792,7 @@ function snapshotConfig() {
     dwellMax: parseFloat($('dwellMax').value) || 5,
     gapMin: parseFloat($('gapMin').value) || 10,
     gapMax: parseFloat($('gapMax').value) || 25,
+    deepCrawl: $('deepCrawl').checked,
   };
 }
 function applySnapshot(s) {
@@ -811,6 +812,7 @@ function applySnapshot(s) {
   $('dwellMax').value = s.dwellMax || 5;
   $('gapMin').value = s.gapMin || 10;
   $('gapMax').value = s.gapMax || 25;
+  $('deepCrawl').checked = s.deepCrawl !== false; // 默认 true
   renderKeywordChips();
   renderPositionTree($('qfPos').value);
   renderCityGrid($('qfCity').value);
@@ -893,6 +895,7 @@ async function buildTasksAndSave() {
     gapMin: parseFloat($('gapMin').value) || 10,
     gapMax: parseFloat($('gapMax').value) || 25,
     companyFilter: $('filterCompany').value.trim(),
+    deepCrawl: $('deepCrawl').checked,
   };
   await chrome.storage.local.set({ pendingConfig: pc });
   await chrome.runtime.sendMessage({ type: 'clear_queue' });

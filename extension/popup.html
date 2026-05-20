@@ -762,6 +762,16 @@
   </details>
 
   <div class="card">
+    <label style="display:flex;align-items:flex-start;gap:6px;cursor:pointer;padding:4px 0">
+      <input type="checkbox" id="deepCrawl" checked style="margin-top:2px">
+      <span>
+        <span style="font-weight:600">深度抓取(含完整 JD)</span>
+        <div class="muted" style="margin-top:2px">默认开。点开每张卡补抓详情接口,LLM 打分能拿到完整 JD/职责/福利。代价:采集时间 +50%,风控概率略高。关掉只抓列表(快,JD 是 ~150 字摘要)</div>
+      </span>
+    </label>
+  </div>
+
+  <div class="card">
     <div style="font-size:12px;color:#6b7280;margin-bottom:6px">
       预计 <b id="comboCount" style="color:#c33">0</b> 个任务
       <span id="comboEst" class="muted"></span>

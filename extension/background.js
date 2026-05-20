@@ -225,7 +225,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: true, ignored: true });
           return;
         }
-        await handleIntercepted(msg.data);
+        await handleIntercepted(msg.data, msg.url);
         sendResponse({ ok: true });
         return;
       }
@@ -500,10 +500,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true;
 });
 
-async function handleIntercepted(payload) {
-  if (!pendingContext) return;
+async function handleIntercepted(payload, url) {
   if (!payload) return;
 
+  // 详情响应路由 ─ 走专门的 handler,不计入 pageResponseCounter
+  if (url && url.indexOf('/job/detail.json') !== -1) {
+    await handleDetailIntercepted(payload);
+    return;
+  }
+
+  if (!pendingContext) return;
   pageResponseCounter++;
 
   // 风控信号: code != 0
@@ -555,6 +561,73 @@ async function handleIntercepted(payload) {
     state.reachedMaxTotal = true;
     log(`  ★ 达到总条数上限 ${state.config.maxTotal},准备结束`);
   }
+}
+
+// ============================================================
+// 详情拦截 + waiter
+// ============================================================
+let pendingDetailResolve = null;
+
+function waitForNextDetail(timeoutMs = 12000) {
+  return new Promise((resolve) => {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (!done) {
+        done = true;
+        pendingDetailResolve = null;
+        resolve(null);
+      }
+    }, timeoutMs);
+    pendingDetailResolve = (data) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      pendingDetailResolve = null;
+      resolve(data);
+    };
+  });
+}
+
+async function handleDetailIntercepted(payload) {
+  if (!payload) return;
+  // 风控信号
+  if (payload.code !== 0) {
+    if (pendingDetailResolve) pendingDetailResolve({ __riskCode: payload.code });
+    riskFlag = true;
+    return;
+  }
+  const info = payload.zpData && payload.zpData.jobInfo;
+  if (!info) return;
+  // 通知等待者
+  if (pendingDetailResolve) {
+    pendingDetailResolve(info);
+  }
+  // 同时直接 merge 到 jobsMap(以防 waiter 没接到)
+  const jobs = await getJobsMap();
+  const jid = info.encryptId || info.encryptJobId || info.jobId;
+  if (jid && jobs[jid]) {
+    mergeDetailIntoJob(jobs[jid], info);
+    await setJobsMap(jobs);
+  }
+}
+
+function mergeDetailIntoJob(item, info) {
+  // 详情字段拍扁,补到列表条目里
+  if (info.postDescription) item.full_jd = info.postDescription;
+  if (info.responsibility)  item.responsibility = info.responsibility;
+  if (info.qualifications)  item.qualifications = info.qualifications;
+  if (Array.isArray(info.skillsLabels)) item.skills = info.skillsLabels.join(',');
+  if (Array.isArray(info.welfareList))  item.welfare = info.welfareList.join(',');
+  if (info.brandInfo) {
+    if (info.brandInfo.brandIndustry  && !item.industry)     item.industry = info.brandInfo.brandIndustry;
+    if (info.brandInfo.brandScaleName && !item.company_size) item.company_size = info.brandInfo.brandScaleName;
+    if (info.brandInfo.brandStageName && !item.financing)    item.financing = info.brandInfo.brandStageName;
+  }
+  if (info.bossInfo) {
+    if (info.bossInfo.bossName  && !item.hr_name)  item.hr_name  = info.bossInfo.bossName;
+    if (info.bossInfo.bossTitle && !item.hr_title) item.hr_title = info.bossInfo.bossTitle;
+  }
+  item.has_detail = true;
 }
 
 // ============================================================
@@ -941,7 +1014,67 @@ async function runOneTask(task, config) {
     await sleep(rand(config.dwellMin * 1000, config.dwellMax * 1000));
   }
 
+  // ─── 深度抓取阶段(点开每张卡拿完整 JD)
+  if (config.deepCrawl && !riskFlag && !state.shouldStop && !state.reachedMaxTotal) {
+    await fetchDetailsForCurrentList(config);
+  }
+
   await cleanupTarget();
+}
+
+async function fetchDetailsForCurrentList(config) {
+  if (!state.currentTabId) return;
+  const r = await sendToTab({ type: 'list_card_ids' });
+  if (!r || !r.ok || !r.cards) {
+    log(`  ⚠ 详情:列不出卡片`);
+    return;
+  }
+  const jobsMap = await getJobsMap();
+  // 只对当前列表里、在我们数据池存在且还没 detail 的卡片做
+  const toFetch = r.cards.filter((c) => c.job_id && jobsMap[c.job_id] && !jobsMap[c.job_id].has_detail);
+  if (toFetch.length === 0) {
+    log(`  · 详情:无需补抓(全已有)`);
+    return;
+  }
+  log(`  ↓ 详情:点开 ${toFetch.length}/${r.cards.length} 张卡补抓完整 JD`);
+
+  const detailDwellMin = (config.dwellMin || 2) * 0.7;
+  const detailDwellMax = (config.dwellMax || 5) * 0.8;
+  let ok = 0;
+  let timeout = 0;
+  let riskInDetail = 0;
+  for (let i = 0; i < toFetch.length; i++) {
+    if (state.shouldStop || riskFlag || state.reachedMaxTotal) break;
+    if (!state.currentTabId) break;
+
+    const c = toFetch[i];
+    const waiterPromise = waitForNextDetail(12000);
+    const clickRes = await sendToTab({ type: 'click_card', index: c.index });
+    if (!clickRes || !clickRes.ok) {
+      // 卡可能因滚动被换位置 — 不致命,跳过
+      continue;
+    }
+    const result = await waiterPromise;
+    if (result === null) {
+      timeout++;
+      continue;
+    }
+    if (result && result.__riskCode !== undefined) {
+      riskInDetail++;
+      log(`  ⚠ 详情:风控 code=${result.__riskCode} 中断`);
+      break;
+    }
+    ok++;
+    // small pause between clicks(模拟阅读)
+    await sleep(rand(detailDwellMin * 1000, detailDwellMax * 1000));
+
+    // 每 10 条进度
+    if ((i + 1) % 10 === 0) {
+      log(`  · 详情进度 ${i + 1}/${toFetch.length}(成功 ${ok})`);
+    }
+  }
+  const fail = toFetch.length - ok;
+  log(`  ✓ 详情:成功 ${ok} / 超时 ${timeout} / 风控中断 ${riskInDetail} / 共 ${toFetch.length}`);
 }
 
 async function cleanupTarget() {
@@ -1318,12 +1451,19 @@ function jobToScoreInput(item) {
     parts.push(`HR: ${hr}`);
   }
   if (item.position_name) parts.push(`Boss 类目: ${item.position_name}`);
+  // 拼上完整 JD(深度抓取的成果)
+  let jdBody = parts.join(' | ');
+  if (item.full_jd) {
+    jdBody += `\n\n=== 完整 JD ===\n${item.full_jd}`;
+    if (item.responsibility) jdBody += `\n\n岗位职责:\n${item.responsibility}`;
+    if (item.qualifications) jdBody += `\n\n任职要求:\n${item.qualifications}`;
+  }
   return {
     title: item.job_name || '',
     company: item.company_name || '',
     city: item.city || item.search_city || '',
     salary: item.salary || '待议',
-    jd: parts.join(' | '),
+    jd: jdBody,
     url: item.job_url || '',
   };
 }

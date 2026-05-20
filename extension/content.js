@@ -210,6 +210,37 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         case 'card_count':
           sendResponse({ ok: true, count: getCardCount() });
           break;
+        case 'list_card_ids': {
+          // 列出所有职位卡 + 对应 encryptJobId(从 a[href*=/job_detail/] 提取)
+          const out = [];
+          const cards = document.querySelectorAll(
+            '.job-card-wrapper, li.job-card-box, .search-job-result li, .job-list-box li'
+          );
+          cards.forEach((card, idx) => {
+            const a = card.querySelector('a[href*="/job_detail/"]');
+            const m = a && a.getAttribute('href').match(/\/job_detail\/([^.]+)\.html/);
+            out.push({ index: idx, job_id: m ? m[1] : '' });
+          });
+          sendResponse({ ok: true, cards: out });
+          break;
+        }
+        case 'click_card': {
+          const cards = document.querySelectorAll(
+            '.job-card-wrapper, li.job-card-box, .search-job-result li, .job-list-box li'
+          );
+          const card = cards[msg.index];
+          if (!card) { sendResponse({ ok: false, error: 'card not at index ' + msg.index }); break; }
+          try {
+            card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            await sleep(rand(250, 550));
+            const link = card.querySelector('a[href*="/job_detail/"]');
+            if (link) link.click(); else card.click();
+            sendResponse({ ok: true });
+          } catch (e) {
+            sendResponse({ ok: false, error: e.message });
+          }
+          break;
+        }
         default:
           sendResponse({ ok: false, error: 'unknown' });
       }

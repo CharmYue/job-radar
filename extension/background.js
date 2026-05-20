@@ -59,6 +59,12 @@ const pipelineState = {
   progress: '',
   error: '',
   shouldStop: false,
+  // 细化进度(popup 拉取后可显示丰富的当前状态)
+  substep: '',                              // 一句话当前在做什么
+  stageStartedAt: null,                     // 当前 stage 开始时间(算 ETA)
+  crawl: { tasksDone: 0, tasksTotal: 0, jobsAdded: 0, currentTask: '' },
+  score: { done: 0, total: 0 },
+  push: { tier: '', sent: 0 },
 };
 
 // ============================================================
@@ -82,6 +88,35 @@ async function sleep(ms) {
 function log(msg) {
   console.log('[boss-final]', msg);
   chrome.runtime.sendMessage({ type: 'progress', msg }).catch(() => {});
+  // 持久化到 storage,popup 重开能 replay
+  persistLog(msg).catch(() => {});
+}
+
+const LOG_KEEP = 200;
+let _logBuffer = null;  // in-memory cache, lazy load
+async function persistLog(msg) {
+  if (_logBuffer === null) {
+    _logBuffer = (await chrome.storage.local.get('runLog')).runLog || [];
+  }
+  const entry = { ts: Date.now(), msg };
+  _logBuffer.push(entry);
+  if (_logBuffer.length > LOG_KEEP) _logBuffer.splice(0, _logBuffer.length - LOG_KEEP);
+  // 节流写入: 每 ~500ms 批量落盘
+  if (!persistLog._flushScheduled) {
+    persistLog._flushScheduled = true;
+    setTimeout(async () => {
+      persistLog._flushScheduled = false;
+      try { await chrome.storage.local.set({ runLog: _logBuffer }); } catch (e) {}
+    }, 500);
+  }
+}
+async function getPersistedLog() {
+  if (_logBuffer !== null) return _logBuffer;
+  return (await chrome.storage.local.get('runLog')).runLog || [];
+}
+async function clearPersistedLog() {
+  _logBuffer = [];
+  await chrome.storage.local.remove('runLog');
 }
 
 function progressLine() {
@@ -328,6 +363,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: true, items });
           break;
         }
+        case 'get_log':
+          sendResponse({ ok: true, log: await getPersistedLog() });
+          break;
+        case 'clear_log':
+          await clearPersistedLog();
+          sendResponse({ ok: true });
+          break;
         case 'pipeline_status': {
           sendResponse({
             ok: true,
@@ -717,6 +759,12 @@ async function startCrawl(config) {
       state.currentKeywordIdx = ti + 1;
       state.currentPage = 0;
 
+      // 更新 pipeline 细化进度
+      pipelineState.crawl.tasksDone = ti;
+      pipelineState.crawl.tasksTotal = q.tasks.length;
+      pipelineState.crawl.currentTask = `${t.positionName} @ ${t.cityName}`;
+      pipelineState.substep = `采集 [${ti + 1}/${q.tasks.length}] ${t.positionName} @ ${t.cityName}`;
+
       const tag = t.experience ? ` exp=${t.experience}` : '';
       log(`[${ti + 1}/${q.tasks.length}] ${t.positionName} @ ${t.cityName}${tag}`);
 
@@ -732,6 +780,7 @@ async function startCrawl(config) {
       }
 
       t.captured = state.added - beforeAdded;
+      pipelineState.crawl.jobsAdded = state.added;
 
       if (riskFlag) {
         t.status = 'failed';
@@ -1711,6 +1760,8 @@ async function scoreAllUnscored() {
     item.score_pitch = r.pitch || '';
     item.score_resume_version = r.resume_version || '';
     progress++;
+    pipelineState.score = { done: progress, total: targetKeys.length };
+    pipelineState.substep = `打分 ${progress}/${targetKeys.length} · ${item.job_name || ''}`.slice(0, 80);
     chrome.runtime.sendMessage({
       type: 'score_progress',
       done: progress,
@@ -1865,9 +1916,15 @@ async function runPipeline(config) {
   pipelineState.shouldStop = false;
   pipelineState.error = '';
   pipelineState.startedAt = Date.now();
+  // 重置细化进度
+  pipelineState.crawl = { tasksDone: 0, tasksTotal: 0, jobsAdded: 0, currentTask: '' };
+  pipelineState.score = { done: 0, total: 0 };
+  pipelineState.push = { tier: '', sent: 0 };
   const notifyStage = (stage, msg) => {
     pipelineState.stage = stage;
     pipelineState.progress = msg || '';
+    pipelineState.substep = msg || '';
+    pipelineState.stageStartedAt = Date.now();
     chrome.runtime.sendMessage({ type: 'pipeline_progress', stage: msg || stage }).catch(() => {});
   };
 

@@ -641,8 +641,9 @@
       <button id="saveProfile" class="green">保存</button>
       <button id="testPush" class="outline">📨 测试推送</button>
       <span id="autoSavedBadge" style="opacity:0;transition:opacity .3s;color:#2a9d4a;font-size:11px;padding:0 6px;flex:0 0 auto">✓ 已自动保存</span>
+      <span id="lastSavedAt" style="color:#888;font-size:11px;padding:0 6px;flex:0 0 auto"></span>
     </div>
-    <div class="muted" style="margin-top:6px">所有字段编辑后 ~1 秒会自动保存,不需要手动点(保存按钮是给你强制 flush 用的)</div>
+    <div class="muted" style="margin-top:6px">字段编辑后 300ms 自动保存。切 tab / 关闭窗口前会立即 flush。"上次保存"显示最近一次落盘时间。</div>
   </div>
 
 </div>
@@ -748,7 +749,7 @@
         </div>
       </div>
       <div class="row">
-        <div><label>每词最多滚动</label><input type="number" id="maxScrolls" value="15" min="1" max="50"></div>
+        <div><label>每词最多滚动 <span class="hint">~15 条/滚;改这个会覆盖上面预设</span></label><input type="number" id="maxScrolls" value="4" min="1" max="50"></div>
         <div><label>总条数上限(0=不限)</label><input type="number" id="maxTotal" value="0" min="0"></div>
       </div>
       <div class="row">
@@ -773,9 +774,19 @@
   </div>
 
   <div class="card">
+    <div class="row" style="margin-bottom:8px">
+      <div>
+        <label>每个关键词×城市最多抓 <span class="hint">实际数量取决于 Boss 返回</span></label>
+        <select id="perQueryCap">
+          <option value="30">约 30(快)</option>
+          <option value="60" selected>约 60(中,推荐)</option>
+          <option value="120">约 120(深)</option>
+          <option value="300">约 300(尽量多)</option>
+        </select>
+      </div>
+    </div>
     <div style="font-size:12px;color:#6b7280;margin-bottom:6px">
-      预计 <b id="comboCount" style="color:#c33">0</b> 个任务
-      <span id="comboEst" class="muted"></span>
+      将生成 <b id="comboCount" style="color:#c33">0</b> 个搜索任务<span id="comboEst" class="muted"></span>,最多尝试抓取 <b id="capEst" style="color:#0a7">0</b> 个岗位
     </div>
     <button id="genQueue" class="green full">✓ 生成任务队列,去运行</button>
   </div>

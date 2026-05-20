@@ -22,8 +22,26 @@ async function init() {
   await loadProfileIntoUI();
   await loadAutoDaily();
   bindAutoSaveOnAll();
+  await replayPersistedLog();
   await refreshAll();
   setInterval(refreshAll, 2500);
+}
+
+// 打开 popup 时 replay 持久化的 log,这样即使流水线在后台跑过,也能看到历史
+async function replayPersistedLog() {
+  const r = await chrome.runtime.sendMessage({ type: 'get_log' });
+  if (!r || !r.ok || !Array.isArray(r.log) || r.log.length === 0) return;
+  const logEl = $('log');
+  if (!logEl) return;
+  const lines = r.log.map((e) => {
+    const d = new Date(e.ts);
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    const ss = String(d.getSeconds()).padStart(2, '0');
+    return `[${hh}:${mm}:${ss}] ${e.msg}`;
+  });
+  logEl.textContent = lines.join('\n') + '\n';
+  logEl.scrollTop = logEl.scrollHeight;
 }
 async function loadDict() {
   const r = await fetch(chrome.runtime.getURL('dict.json'));
@@ -124,8 +142,18 @@ async function refreshPipelineState() {
   $('scoreAll').disabled = piRunning;
   $('pushNow').disabled = piRunning;
 
-  // 进度
-  const prog = p.progress || (s.progress ? `[${s.progress.ki}/${s.progress.kt} | R${s.progress.p} | +${s.progress.added}]` : '');
+  // 进度: 优先用 substep(更具体),退化到 progress(stage 名)
+  let prog = p.substep || p.progress || '';
+  if (s.progress) {
+    prog = prog || `[${s.progress.ki}/${s.progress.kt} | R${s.progress.p} | +${s.progress.added}]`;
+  }
+  // 算 ETA(打分阶段)
+  if (p.stage === 'scoring' && p.score && p.score.total > 0 && p.stageStartedAt) {
+    const elapsed = (Date.now() - p.stageStartedAt) / 1000;
+    const per = elapsed / Math.max(1, p.score.done);
+    const remain = Math.round(per * (p.score.total - p.score.done));
+    if (remain > 0 && remain < 9999) prog += ` · 还约 ${remain}s`;
+  }
   $('progress').textContent = prog;
 }
 
@@ -133,6 +161,11 @@ async function refreshPipelineState() {
 // Tabs
 // ============================================================
 async function switchTab(panel) {
+  // 离开画像 tab 前:立即落盘 + 取消挂起的 autosave,防止 timer 在 reload 后才写老 DOM 值
+  const currentActive = document.querySelector('.tab.active');
+  if (currentActive && currentActive.dataset.panel === 'profile' && panel !== 'profile') {
+    await flushAutoSave();
+  }
   document.querySelectorAll('.tab').forEach((t) => {
     if (t.classList.contains('locked')) return;
     t.classList.toggle('active', t.dataset.panel === panel);
@@ -140,10 +173,32 @@ async function switchTab(panel) {
   document.querySelectorAll('.panel').forEach((x) => {
     x.classList.toggle('active', x.id === 'panel-' + panel);
   });
-  // 切到 profile 或 search 时,显式加载该 tab 一次
-  if (panel === 'profile') await loadProfileIntoUI();
+  // 注:切回 profile **不再重读 storage** 覆盖 DOM(DOM 是用户的编辑缓冲区)
+  // 只刷新 checklist + 上次保存时间(不动表单字段)
+  if (panel === 'profile') await refreshProfileChecklistOnly();
   if (panel === 'search') await refreshPresetDropdown();
   await refreshAll();
+}
+
+async function refreshProfileChecklistOnly() {
+  const r = await chrome.runtime.sendMessage({ type: 'get_profile' });
+  const p = (r && r.ok) ? r.profile : {};
+  const ar = await chrome.runtime.sendMessage({ type: 'get_api' });
+  const a = (ar && ar.ok) ? ar.api : {};
+  renderChecklist(p, a);
+  renderLastSavedAt(p.last_saved_at);
+}
+
+function renderLastSavedAt(ts) {
+  const el = $('lastSavedAt');
+  if (!el) return;
+  if (!ts) { el.textContent = ''; return; }
+  const d = new Date(ts);
+  if (isNaN(d)) { el.textContent = ''; return; }
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  el.textContent = `上次保存 ${hh}:${mm}:${ss}`;
 }
 
 document.querySelectorAll('.tab').forEach((t) => {
@@ -210,6 +265,9 @@ function setSlider(id, valueK) {
 }
 
 async function loadProfileIntoUI() {
+  // 每次完整 reload 都 bump version,作废之前挂着的 autosave timer
+  _profileEditVersion++;
+  if (_autoSaveTimer) { clearTimeout(_autoSaveTimer); _autoSaveTimer = null; }
   const r = await chrome.runtime.sendMessage({ type: 'get_profile' });
   const p = (r && r.ok) ? r.profile : {};
   $('pfSummary').value = p.summary || '';
@@ -242,6 +300,7 @@ async function loadProfileIntoUI() {
   CURRENT_ACTIVE_PROVIDER = active;
 
   renderChecklist(p, a);
+  renderLastSavedAt(p.last_saved_at);
 }
 
 const CUSTOM_MODEL_VALUE = '__custom__';
@@ -371,7 +430,10 @@ function profileFromUI() {
 
 async function saveProfileFromUI(opts = {}) {
   // Profile
-  await chrome.runtime.sendMessage({ type: 'save_profile', profile: profileFromUI() });
+  const p = profileFromUI();
+  p.last_saved_at = new Date().toISOString();
+  await chrome.runtime.sendMessage({ type: 'save_profile', profile: p });
+  renderLastSavedAt(p.last_saved_at);
 
   // API: 保存当前 provider 的字段 + wxpusher
   const active = $('apiProvider').value;
@@ -406,15 +468,22 @@ async function saveProfileFromUI(opts = {}) {
 
 // ─────────────────────── Autosave ───────────────────────
 let _autoSaveTimer = null;
+let _profileEditVersion = 0;  // 每次 loadProfileIntoUI 都 +1; 早于本次的 timer 不能落盘
 function scheduleAutoSave() {
   if (_autoSaveTimer) clearTimeout(_autoSaveTimer);
+  const token = _profileEditVersion;
   _autoSaveTimer = setTimeout(() => {
+    if (token !== _profileEditVersion) return;  // DOM 期间被 reload 过,丢弃这次保存
     saveProfileFromUI({ silent: true }).catch((e) => console.warn('[autosave]', e));
   }, 300);
 }
-function flushAutoSave() {
+async function flushAutoSave() {
   if (_autoSaveTimer) { clearTimeout(_autoSaveTimer); _autoSaveTimer = null; }
-  saveProfileFromUI({ silent: true }).catch((e) => console.warn('[autosave-blur]', e));
+  try {
+    await saveProfileFromUI({ silent: true });
+  } catch (e) {
+    console.warn('[autosave-flush]', e);
+  }
 }
 
 function flashAutoSavedBadge() {
@@ -761,8 +830,17 @@ function updateSelCounts() {
   $('comboCount').textContent = combo;
   const m = combo * 4;
   $('comboEst').textContent = combo > 0
-    ? `· 预计 ${m < 60 ? m + ' 分钟' : (m / 60).toFixed(1) + ' 小时'}`
+    ? ` · 预计 ${m < 60 ? m + ' 分钟' : (m / 60).toFixed(1) + ' 小时'}`
     : '';
+  // 显示最多抓取上限(以 maxScrolls 为准 — 高级里能覆盖)
+  const scrolls = parseInt(($('maxScrolls') || {}).value) || 4;
+  const capEl = $('capEst');
+  if (capEl) capEl.textContent = combo * scrolls * 15;
+}
+
+// perQueryCap (semantic, 大概抓多少) → maxScrolls (boss 一滚 ~15 条)
+function perCapToScrolls(cap) {
+  return Math.max(1, Math.ceil(cap / 15));
 }
 
 // ─────────────────────── 预设 ───────────────────────
@@ -790,7 +868,8 @@ function snapshotConfig() {
     filterCompany: $('filterCompany').value,
     sortMode: $('sortMode').value,
     runMode: $('runMode').value,
-    maxScrolls: parseInt($('maxScrolls').value) || 15,
+    perQueryCap: parseInt($('perQueryCap').value) || 60,
+    maxScrolls: parseInt($('maxScrolls').value) || perCapToScrolls(parseInt($('perQueryCap').value) || 60),
     maxTotal: parseInt($('maxTotal').value) || 0,
     dwellMin: parseFloat($('dwellMin').value) || 2,
     dwellMax: parseFloat($('dwellMax').value) || 5,
@@ -810,7 +889,8 @@ function applySnapshot(s) {
   $('filterCompany').value = s.filterCompany || '';
   $('sortMode').value = s.sortMode || 'newest';
   $('runMode').value = s.runMode || 'window_isolated';
-  $('maxScrolls').value = s.maxScrolls || 15;
+  $('maxScrolls').value = s.maxScrolls || 4;
+  if (s.perQueryCap) $('perQueryCap').value = s.perQueryCap;
   $('maxTotal').value = s.maxTotal || 0;
   $('dwellMin').value = s.dwellMin || 2;
   $('dwellMax').value = s.dwellMax || 5;
@@ -892,7 +972,8 @@ async function buildTasksAndSave() {
     tasks,
     sortMode: $('sortMode').value,
     runMode: $('runMode').value,
-    maxScrolls: parseInt($('maxScrolls').value) || 15,
+    perQueryCap: parseInt($('perQueryCap').value) || 60,
+    maxScrolls: parseInt($('maxScrolls').value) || perCapToScrolls(parseInt($('perQueryCap').value) || 60),
     maxTotal: parseInt($('maxTotal').value) || 0,
     dwellMin: parseFloat($('dwellMin').value) || 2,
     dwellMax: parseFloat($('dwellMax').value) || 5,
@@ -922,6 +1003,13 @@ $('clearCity').addEventListener('click', () => {
   updateSelCounts();
 });
 $('genQueue').addEventListener('click', buildTasksAndSave);
+$('perQueryCap').addEventListener('change', () => {
+  // 同步到「高级」的 maxScrolls,保持单一事实源
+  const cap = parseInt($('perQueryCap').value) || 60;
+  $('maxScrolls').value = perCapToScrolls(cap);
+  updateSelCounts();
+});
+$('maxScrolls').addEventListener('change', updateSelCounts);
 
 // ============================================================
 // 运行 tab — pipeline / 分步 / 池 / 结果列表

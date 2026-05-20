@@ -37,3 +37,7 @@ launchd/com.jobradar.bossreminder.plist
 .idea/
 .vscode/
 .claude/
+
+# Alternative Boss crawler experiments (parallel to extension/, not authoritative)
+boss_drission.py
+boss_setup_login.py

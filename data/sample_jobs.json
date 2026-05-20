@@ -1,0 +1,47 @@
+[
+  {
+    "title": "AI Solution Engineer (GenAI)",
+    "company": "DataLake (独角兽,B 轮)",
+    "city": "上海",
+    "salary": "35-50K · 14薪",
+    "jd": "面向大客户的 AI 解决方案工程师。负责 LLM/RAG/Agent 在企业场景落地:售前 demo、POC、技术答疑、客户成功。要求:CS 本科及以上,1-3 年云/AI 产品经验,英文流利可面客户,熟悉 OpenAI/Azure OpenAI/向量检索/FastAPI 优先,有微软 Entra ID/IAM 背景加分。外资文化,弹性工作。",
+    "url": "https://example.com/jobs/ase-shanghai",
+    "source": "manual"
+  },
+  {
+    "title": "LLM 应用开发工程师",
+    "company": "云栖科技 (C 轮,杭州)",
+    "city": "杭州",
+    "salary": "28-40K · 13薪",
+    "jd": "负责公司内部 AI 中台与对外 Agent 产品开发。技术栈 Python/FastAPI/LangGraph/PostgreSQL。要求 1-3 年后端或 AI 应用开发经验,熟 RAG/Agent 框架者优先。不需要科班算法。",
+    "url": "https://example.com/jobs/llm-app-hz",
+    "source": "manual"
+  },
+  {
+    "title": "Technical Account Manager - China",
+    "company": "AkamaiCloud (美资上市公司)",
+    "city": "北京",
+    "salary": "30-40K · 12薪",
+    "jd": "面向中国头部互联网客户,提供 CDN/安全/边缘计算技术支持与方案咨询。要求 2-5 年企业客户技术对接经验,英文流利,可独立处理 escalation。微软 Azure/Entra ID 或类似 IAM 背景优先。",
+    "url": "https://example.com/jobs/tam-beijing",
+    "source": "manual"
+  },
+  {
+    "title": "大模型算法研究员",
+    "company": "某 AI Lab",
+    "city": "北京",
+    "salary": "50-70K · 16薪",
+    "jd": "负责 LLM 预训练/SFT/RLHF 全链路。要求:博士优先,顶会论文 2 篇以上,精通 PyTorch/DeepSpeed,熟悉分布式训练。算法岗。",
+    "url": "https://example.com/jobs/llm-research",
+    "source": "manual"
+  },
+  {
+    "title": "AI 工程师(后端方向)",
+    "company": "小创业公司 (天使轮,15 人)",
+    "city": "上海",
+    "salary": "20-30K · 12薪",
+    "jd": "负责 AI 产品后端开发,Python/FastAPI/PostgreSQL。要求 1 年以上经验,有 LLM 应用经验加分。早期团队,加班较多。",
+    "url": "https://example.com/jobs/ai-backend-sh",
+    "source": "manual"
+  }
+]

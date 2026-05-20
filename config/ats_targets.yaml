@@ -1,0 +1,33 @@
+# ATS 自动抓取目标列表
+# 改这个文件即可调整 run_daily.py 默认抓取的公司,不需要改代码。
+#
+# 关键词从 profile.yaml 的 s_tier_roles + a_tier_roles 自动拼接,
+# 这里不用再写关键词。
+# 城市从 profile.yaml 的 cities 字段自动过滤(非中国/APAC 岗位会被丢弃)。
+
+greenhouse:
+  # slug = 公开 board 的子路径(boards-api.greenhouse.io/v1/boards/<slug>/jobs)
+  # 已核验有数据:
+  - databricks    # 244 jobs
+  - anthropic     # 34
+  - datadog       # 409
+  - mongodb       # 417
+  - stripe        # 485
+  - figma         # 160
+
+lever:
+  # slug = api.lever.co/v0/postings/<slug>
+  # 未核验;失败会被 base.py 的错误处理静默跳过
+  - brex
+  - notion
+
+smartrecruiters:
+  # slug = api.smartrecruiters.com/v1/companies/<slug>/postings
+  # 已核验:
+  - ServiceNow    # 503 jobs
+
+workday:
+  # 大多数 Workday 租户对匿名 POST 返回 401,会被静默跳过
+  - host: https://salesforce.wd12.myworkdayjobs.com
+    tenant: salesforce
+    site: External_Career_Site

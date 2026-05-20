@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  17:00 WeChat reminder to manually run /boss in Claude Code.
+  Copy to com.jobradar.bossreminder.plist and replace __HOME__ with $HOME.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jobradar.bossreminder</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-c</string>
+    <string>cd __HOME__/job-radar &amp;&amp; __HOME__/.local/bin/uv run python scripts/push_reminder.py 2&gt;&gt; data/reminder.log</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>17</integer>
+    <key>Minute</key><integer>0</integer>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>__HOME__/job-radar/data/reminder_out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/job-radar/data/reminder_err.log</string>
+
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>

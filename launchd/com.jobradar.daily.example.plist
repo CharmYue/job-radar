@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Copy this to com.jobradar.daily.plist and replace __HOME__ with your $HOME
+  (launchd does not expand env vars). Then:
+    launchctl load -w ~/Library/LaunchAgents/com.jobradar.daily.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jobradar.daily</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-c</string>
+    <string>cd __HOME__/job-radar &amp;&amp; __HOME__/.local/bin/uv run python scripts/run_daily.py --ats-only 2&gt;&gt; data/jobradar.log</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>6</integer>
+    <key>Minute</key><integer>30</integer>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>__HOME__/job-radar/data/daily_out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/job-radar/data/daily_err.log</string>
+
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>

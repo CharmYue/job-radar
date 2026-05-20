@@ -1,0 +1,54 @@
+# 候选人背景(给 LLM 用)— 复制为 profile.yaml,填入自己的信息
+candidate:
+  # 高层 summary — LLM 第一眼读到的,要求精炼。详细简历见 resume_file。
+  summary: |
+    你的学历背景、年限、核心技术栈、最近项目一句话总结。
+    示例:某大学 CS 硕士,英文流利。当前 AI 应用开发 N 年,
+    技术栈 Python/FastAPI/LangGraph/PostgreSQL,有 RAG / Agent / 大模型落地经验。
+    此前 [前公司] [角色] N 年,深度 [关键技术领域]。
+
+  # 真实简历文件(score.py 会自动读入并拼到 LLM context)
+  # 改简历内容直接编辑 data/resume.md,profile.yaml 不用动。
+  resume_file: data/resume.md
+
+  target_monthly_min: 30000      # 最低可接受月薪
+  target_monthly_ideal: 40000    # 理想月薪
+  target_annual: 500000          # 年薪目标
+
+  cities:
+    - 上海
+    - 杭州
+    - 北京
+
+  city_notes:
+    北京: "无户口需溢价(见 beijing_salary_premium)"
+
+  # S 级岗位关键词 — 命中即顶级匹配
+  s_tier_roles:
+    - AI Solution Engineer
+    - GenAI Solution Engineer
+    - AI 解决方案工程师
+    - AI Customer Engineer
+    - IAM Solution Engineer
+
+  # A 级岗位关键词 — 相关但非首选
+  a_tier_roles:
+    - LLM Application Engineer
+    - AI 应用开发工程师
+    - RAG 工程师
+    - Agent 开发工程师
+    - Technical Customer Success
+
+  # 命中任一关键词 → 本地 hard_reject(不发 API,直接 Reject)
+  hard_reject:
+    - 算法研究员
+    - 大模型算法
+    - NLP 算法
+    - CV 算法
+    - 模型训练
+    - 外包驻场
+    - 培训讲师
+    - 数据标注
+
+# 北京薪资溢价软提示阈值(LLM 用,北京岗薪资若没比沪杭高 ≥10% 在 concerns 提示)
+beijing_salary_premium: 0.10

@@ -1,0 +1,38 @@
+# Secrets & local config
+.env
+# personal resume summary + salary targets
+config/profile.yaml
+# your real resume — keep local
+data/resume.md
+
+# Local data & scraping artifacts
+data/*.db
+data/*.log
+data/*.json
+data/*.md
+data/*.png
+# Boss session cookies (sensitive)
+data/boss_state.json
+
+# Exceptions: keep these committed
+!data/sample_jobs.json
+!data/.gitkeep
+
+# Python / build
+.venv/
+__pycache__/
+*.pyc
+dist/
+build/
+*.egg-info/
+uv.lock
+
+# launchd: keep .example templates only, ignore your active copies
+launchd/com.jobradar.daily.plist
+launchd/com.jobradar.bossreminder.plist
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+.claude/

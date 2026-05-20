@@ -233,23 +233,66 @@ async function loadProfileIntoUI() {
   $('apiProvider').value = active;
   const cfg = (a.providers && a.providers[active]) || {};
   $('apiProviderKey').value = cfg.api_key || '';
-  $('apiProviderModel').value = cfg.model || '';
+  populateModelDropdown(active, cfg.model);
   $('apiProviderBaseUrl').value = cfg.base_url || '';
   $('apiWxToken').value = a.wxpusher_token || '';
   $('apiWxUid').value = a.wxpusher_uid || '';
-  refreshProviderHint();
   CURRENT_ACTIVE_PROVIDER = active;
 
   renderChecklist(p, a);
 }
 
-function refreshProviderHint() {
-  const meta = CURRENT_PROVIDERS_META && CURRENT_PROVIDERS_META[$('apiProvider').value];
+const CUSTOM_MODEL_VALUE = '__custom__';
+
+function populateModelDropdown(providerKey, currentModel) {
+  const meta = CURRENT_PROVIDERS_META && CURRENT_PROVIDERS_META[providerKey];
+  const sel = $('apiProviderModel');
+  sel.innerHTML = '';
   if (!meta) return;
-  $('apiProviderModel').placeholder = meta.default_model;
+
+  const models = meta.models || [];
+  for (const m of models) {
+    const opt = document.createElement('option');
+    opt.value = m.id;
+    opt.textContent = m.label || m.id;
+    sel.appendChild(opt);
+  }
+  // 「其他(自定义)」
+  const customOpt = document.createElement('option');
+  customOpt.value = CUSTOM_MODEL_VALUE;
+  customOpt.textContent = '其他(自定义 model 名)';
+  sel.appendChild(customOpt);
+
+  // 选中状态
+  const presetIds = new Set(models.map((m) => m.id));
+  if (!currentModel) {
+    sel.value = meta.default_model;
+    $('apiProviderModelCustom').style.display = 'none';
+    $('apiProviderModelCustom').value = '';
+  } else if (presetIds.has(currentModel)) {
+    sel.value = currentModel;
+    $('apiProviderModelCustom').style.display = 'none';
+    $('apiProviderModelCustom').value = '';
+  } else {
+    // 不在预设里 → 显示为「其他」并填回 custom 框
+    sel.value = CUSTOM_MODEL_VALUE;
+    $('apiProviderModelCustom').style.display = 'block';
+    $('apiProviderModelCustom').value = currentModel;
+  }
+
+  // 折叠/展开 base_url
   $('apiProviderBaseUrl').placeholder = meta.base_url;
-  $('providerDefaultHint').textContent =
-    `默认 model: ${meta.default_model} · 默认 base url: ${meta.base_url}`;
+
+  // 备注(如豆包的 ep-xxx 提示)
+  $('providerNote').textContent = meta.note || '';
+}
+
+function effectiveModelValue() {
+  const sel = $('apiProviderModel');
+  if (sel.value === CUSTOM_MODEL_VALUE) {
+    return $('apiProviderModelCustom').value.trim();
+  }
+  return sel.value;
 }
 
 // 切换 provider 时,先 save 当前的(避免丢) → 然后载入新 provider 的配置
@@ -266,9 +309,8 @@ async function onProviderSwitch() {
   const a = (ar && ar.ok) ? ar.api : {};
   const cfg = (a.providers && a.providers[next]) || {};
   $('apiProviderKey').value = cfg.api_key || '';
-  $('apiProviderModel').value = cfg.model || '';
+  populateModelDropdown(next, cfg.model);
   $('apiProviderBaseUrl').value = cfg.base_url || '';
-  refreshProviderHint();
 }
 
 async function saveActiveProviderFields(providerKey) {
@@ -277,7 +319,7 @@ async function saveActiveProviderFields(providerKey) {
   const providers = { ...(a.providers || {}) };
   providers[providerKey] = {
     api_key: $('apiProviderKey').value.trim(),
-    model: $('apiProviderModel').value.trim(),
+    model: effectiveModelValue(),
     base_url: $('apiProviderBaseUrl').value.trim(),
   };
   await chrome.runtime.sendMessage({
@@ -336,7 +378,7 @@ async function saveProfileFromUI() {
   const providers = { ...(a.providers || {}) };
   providers[active] = {
     api_key: $('apiProviderKey').value.trim(),
-    model: $('apiProviderModel').value.trim(),
+    model: effectiveModelValue(),
     base_url: $('apiProviderBaseUrl').value.trim(),
   };
   await chrome.runtime.sendMessage({
@@ -395,6 +437,17 @@ $('pfMonthlyMax').addEventListener('input', () => {
 });
 
 $('apiProvider').addEventListener('change', onProviderSwitch);
+$('apiProviderModel').addEventListener('change', () => {
+  const sel = $('apiProviderModel');
+  const custom = $('apiProviderModelCustom');
+  if (sel.value === CUSTOM_MODEL_VALUE) {
+    custom.style.display = 'block';
+    custom.focus();
+  } else {
+    custom.style.display = 'none';
+    custom.value = '';
+  }
+});
 
 $('saveProfile').addEventListener('click', saveProfileFromUI);
 $('testPush').addEventListener('click', async () => {

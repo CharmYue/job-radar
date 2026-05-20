@@ -603,23 +603,21 @@
       <option value="anthropic">Claude</option>
     </select>
 
-    <div class="row" style="margin-top:6px">
-      <div>
-        <label>API key <span class="hint" id="providerHint"></span></label>
-        <input type="password" id="apiProviderKey" placeholder="sk-...">
-      </div>
+    <div style="margin-top:6px">
+      <label>API key</label>
+      <input type="password" id="apiProviderKey" placeholder="sk-...">
     </div>
-    <div class="row">
-      <div>
-        <label>Model 名(留空 = 用默认)</label>
-        <input type="text" id="apiProviderModel">
-      </div>
-      <div>
-        <label>自定义 base URL(高级,通常不填)</label>
-        <input type="text" id="apiProviderBaseUrl">
-      </div>
+    <div style="margin-top:6px">
+      <label>Model</label>
+      <select id="apiProviderModel"></select>
     </div>
-    <div class="muted" id="providerDefaultHint" style="margin-top:4px"></div>
+    <input type="text" id="apiProviderModelCustom" placeholder="自定义 model 名(如 ep-xxx)" style="display:none;margin-top:4px">
+    <div class="muted" id="providerNote" style="margin-top:4px"></div>
+
+    <details class="collapsible" style="margin-top:6px">
+      <summary>⚙️ 高级:自定义 base URL(走代理/中转时用)</summary>
+      <input type="text" id="apiProviderBaseUrl" placeholder="留空 = 用官方 base url" style="margin-top:4px">
+    </details>
   </div>
 
   <div class="card">

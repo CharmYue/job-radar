@@ -432,7 +432,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case 'list_providers': {
           const out = {};
           for (const [k, v] of Object.entries(PROVIDERS)) {
-            out[k] = { name: v.name, default_model: v.default_model, base_url: v.base_url };
+            out[k] = {
+              name: v.name,
+              default_model: v.default_model,
+              base_url: v.base_url,
+              models: v.models || [],
+              note: v.note || '',
+            };
           }
           sendResponse({ ok: true, providers: out });
           break;
@@ -1101,14 +1107,94 @@ const DEFAULT_PROFILE = {
 };
 
 // LLM provider 配置表
+// models: { id, label } — label 含「推荐」/「快」/「贵」等线索
 const PROVIDERS = {
-  deepseek:  { name: 'DeepSeek',         base_url: 'https://api.deepseek.com',                          default_model: 'deepseek-chat',                protocol: 'openai'    },
-  qwen:      { name: '通义千问',         base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',  default_model: 'qwen-plus',                    protocol: 'openai'    },
-  doubao:    { name: '豆包 (火山方舟)',  base_url: 'https://ark.cn-beijing.volces.com/api/v3',           default_model: 'doubao-1-5-pro-32k-250115',    protocol: 'openai'    },
-  minimax:   { name: 'MiniMax',          base_url: 'https://api.minimax.chat/v1',                        default_model: 'abab6.5s-chat',                protocol: 'openai'    },
-  zhipu:     { name: '智谱 GLM',         base_url: 'https://open.bigmodel.cn/api/paas/v4',               default_model: 'glm-4-plus',                   protocol: 'openai'    },
-  openai:    { name: 'OpenAI GPT',       base_url: 'https://api.openai.com/v1',                          default_model: 'gpt-4o-mini',                  protocol: 'openai'    },
-  anthropic: { name: 'Claude',           base_url: 'https://api.anthropic.com/v1',                       default_model: 'claude-sonnet-4-5',            protocol: 'anthropic' },
+  deepseek: {
+    name: 'DeepSeek',
+    base_url: 'https://api.deepseek.com',
+    protocol: 'openai',
+    default_model: 'deepseek-chat',
+    models: [
+      { id: 'deepseek-chat',     label: 'deepseek-chat — 推荐 (最新 V3.x,性价比)' },
+      { id: 'deepseek-reasoner', label: 'deepseek-reasoner — 推理增强 (慢 + 贵 3-8x)' },
+    ],
+  },
+  qwen: {
+    name: '通义千问',
+    base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    protocol: 'openai',
+    default_model: 'qwen3.6-plus',
+    models: [
+      { id: 'qwen3.6-plus',  label: 'qwen3.6-plus — 推荐 (2026 最新 plus)' },
+      { id: 'qwen3-max',     label: 'qwen3-max — 旗舰' },
+      { id: 'qwen3.6-flash', label: 'qwen3.6-flash — 极速,便宜' },
+      { id: 'qwen-plus',     label: 'qwen-plus — 老牌稳定' },
+      { id: 'qwen-turbo',    label: 'qwen-turbo — 最便宜' },
+    ],
+  },
+  doubao: {
+    name: '豆包 (火山方舟)',
+    base_url: 'https://ark.cn-beijing.volces.com/api/v3',
+    protocol: 'openai',
+    default_model: 'doubao-1-5-pro-32k-250115',
+    models: [
+      { id: 'doubao-1-5-pro-32k-250115',     label: 'doubao-1.5-pro-32k — 推荐 (平衡)' },
+      { id: 'doubao-1-5-pro-256k-250115',    label: 'doubao-1.5-pro-256k — 长上下文' },
+      { id: 'doubao-1-5-thinking-pro',       label: 'doubao-1.5-thinking-pro — 推理增强' },
+      { id: 'doubao-1-5-lite-32k-250115',    label: 'doubao-1.5-lite-32k — 轻量便宜' },
+    ],
+    note: '需要 endpoint id (ep-xxx) 时选「其他」手填',
+  },
+  minimax: {
+    name: 'MiniMax',
+    base_url: 'https://api.minimax.chat/v1',
+    protocol: 'openai',
+    default_model: 'MiniMax-M2.7',
+    models: [
+      { id: 'MiniMax-M2.7',            label: 'MiniMax-M2.7 — 推荐 (2026 SOTA)' },
+      { id: 'MiniMax-M2.7-highspeed',  label: 'MiniMax-M2.7-highspeed — 加速版' },
+      { id: 'MiniMax-M2.5',            label: 'MiniMax-M2.5 — 上一代' },
+      { id: 'MiniMax-M1',              label: 'MiniMax-M1 — 长上下文 1M' },
+      { id: 'abab6.5s-chat',           label: 'abab6.5s-chat — 老牌稳定' },
+    ],
+  },
+  zhipu: {
+    name: '智谱 GLM',
+    base_url: 'https://open.bigmodel.cn/api/paas/v4',
+    protocol: 'openai',
+    default_model: 'glm-4.6',
+    models: [
+      { id: 'glm-4.6',      label: 'glm-4.6 — 推荐 (稳定生产)' },
+      { id: 'glm-5',        label: 'glm-5 — 最新旗舰' },
+      { id: 'glm-4.5',      label: 'glm-4.5 — 上一代' },
+      { id: 'glm-4.5-air',  label: 'glm-4.5-air — 轻量' },
+      { id: 'glm-4-flash',  label: 'glm-4-flash — 极速 (有免费额度)' },
+    ],
+  },
+  openai: {
+    name: 'OpenAI GPT',
+    base_url: 'https://api.openai.com/v1',
+    protocol: 'openai',
+    default_model: 'gpt-5.4-mini',
+    models: [
+      { id: 'gpt-5.4-mini',  label: 'gpt-5.4-mini — 推荐 (性价比)' },
+      { id: 'gpt-5.5',       label: 'gpt-5.5 — 2026 旗舰' },
+      { id: 'gpt-5.4',       label: 'gpt-5.4 — 上一代旗舰' },
+      { id: 'gpt-5.4-nano',  label: 'gpt-5.4-nano — 最便宜' },
+    ],
+  },
+  anthropic: {
+    name: 'Claude',
+    base_url: 'https://api.anthropic.com/v1',
+    protocol: 'anthropic',
+    default_model: 'claude-sonnet-4-6',
+    models: [
+      { id: 'claude-sonnet-4-6',   label: 'claude-sonnet-4-6 — 推荐 (1M context)' },
+      { id: 'claude-opus-4-7',     label: 'claude-opus-4-7 — 最强 (贵)' },
+      { id: 'claude-haiku-4-5',    label: 'claude-haiku-4-5 — 快且便宜' },
+      { id: 'claude-sonnet-4-5',   label: 'claude-sonnet-4-5 — 上一代 sonnet' },
+    ],
+  },
 };
 
 const DEFAULT_API = {

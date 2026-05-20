@@ -608,25 +608,33 @@ async function handleIntercepted(payload, url) {
 // ============================================================
 // 详情拦截 + waiter
 // ============================================================
-let pendingDetailResolve = null;
+// 改为 by-job-id 的 resolver map,避免单 global 错配:
+// 如果点了 A 卡晚到的 detail 在点 B 卡之后才到,以前会把 A 的数据填到 B 的 waiter。
+const pendingDetailResolvers = new Map();  // job_id → { resolve, timer }
+// 无 expected_id 时的兜底:用 fallback queue,先到先服务
+const pendingDetailFallback = [];
 
-function waitForNextDetail(timeoutMs = 12000) {
+function waitForNextDetail(timeoutMs = 12000, expectedJobId = '') {
   return new Promise((resolve) => {
     let done = false;
-    const timer = setTimeout(() => {
-      if (!done) {
-        done = true;
-        pendingDetailResolve = null;
-        resolve(null);
-      }
-    }, timeoutMs);
-    pendingDetailResolve = (data) => {
+    const finish = (data) => {
       if (done) return;
       done = true;
       clearTimeout(timer);
-      pendingDetailResolve = null;
+      if (expectedJobId) pendingDetailResolvers.delete(expectedJobId);
+      else {
+        const idx = pendingDetailFallback.indexOf(entry);
+        if (idx !== -1) pendingDetailFallback.splice(idx, 1);
+      }
       resolve(data);
     };
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    const entry = { resolve: finish };
+    if (expectedJobId) {
+      pendingDetailResolvers.set(expectedJobId, entry);
+    } else {
+      pendingDetailFallback.push(entry);
+    }
   });
 }
 
@@ -634,19 +642,26 @@ async function handleDetailIntercepted(payload) {
   if (!payload) return;
   // 风控信号
   if (payload.code !== 0) {
-    if (pendingDetailResolve) pendingDetailResolve({ __riskCode: payload.code });
+    // 风控对所有挂着的 waiter 都广播
+    pendingDetailResolvers.forEach((e) => e.resolve({ __riskCode: payload.code }));
+    pendingDetailResolvers.clear();
+    pendingDetailFallback.forEach((e) => e.resolve({ __riskCode: payload.code }));
+    pendingDetailFallback.length = 0;
     riskFlag = true;
     return;
   }
   const info = payload.zpData && payload.zpData.jobInfo;
   if (!info) return;
-  // 通知等待者
-  if (pendingDetailResolve) {
-    pendingDetailResolve(info);
+  const jid = info.encryptId || info.encryptJobId || info.jobId;
+  // 优先匹配 by-id
+  if (jid && pendingDetailResolvers.has(jid)) {
+    pendingDetailResolvers.get(jid).resolve(info);
+  } else if (pendingDetailFallback.length > 0) {
+    // 兜底:先到先服务
+    pendingDetailFallback.shift().resolve(info);
   }
   // 同时直接 merge 到 jobsMap(以防 waiter 没接到)
   const jobs = await getJobsMap();
-  const jid = info.encryptId || info.encryptJobId || info.jobId;
   if (jid && jobs[jid]) {
     mergeDetailIntoJob(jobs[jid], info);
     await setJobsMap(jobs);
@@ -1097,7 +1112,8 @@ async function fetchDetailsForCurrentList(config) {
     if (!state.currentTabId) break;
 
     const c = toFetch[i];
-    const waiterPromise = waitForNextDetail(12000);
+    // 传 expected job_id 让 waiter 精确匹配,避免上一张卡的延迟响应错配到本卡
+    const waiterPromise = waitForNextDetail(12000, c.job_id || '');
     const clickRes = await sendToTab({ type: 'click_card', index: c.index });
     if (!clickRes || !clickRes.ok) {
       // 卡可能因滚动被换位置 — 不致命,跳过
@@ -1746,34 +1762,61 @@ async function scoreAllUnscored() {
   if (targetKeys.length === 0) return { scored: 0, skipped: allKeys.length };
 
   let progress = 0;
+  let failed = 0;
+  let stoppedAt = 0;
   log(`▶ 开始打分: ${targetKeys.length} 条未打分(共 ${allKeys.length})`);
 
+  // 每 N 条增量落盘,避免崩了全丢
+  const PERSIST_EVERY = 10;
+  let sinceLastPersist = 0;
+  const persistMaybe = async (force = false) => {
+    sinceLastPersist++;
+    if (force || sinceLastPersist >= PERSIST_EVERY) {
+      sinceLastPersist = 0;
+      await setJobsMap(jobsMap);
+    }
+  };
+
   const tasks = targetKeys.map((k) => async () => {
+    // 关键:每条进 LLM 前先检查 stop
+    if (pipelineState.shouldStop) {
+      stoppedAt++;
+      return { stopped: true };
+    }
     const item = jobsMap[k];
     const job = jobToScoreInput(item);
-    const raw = await callLLM(buildScoringMessages(job, profile), activeProvider, providerConfig);
-    const r = parseScoreReply(raw);
-    item.score = r.score;
-    item.score_priority = r.priority;
-    item.score_reason = r.reason;
-    item.score_concerns = r.concerns;
-    item.score_pitch = r.pitch || '';
-    item.score_resume_version = r.resume_version || '';
-    progress++;
-    pipelineState.score = { done: progress, total: targetKeys.length };
-    pipelineState.substep = `打分 ${progress}/${targetKeys.length} · ${item.job_name || ''}`.slice(0, 80);
+    try {
+      const raw = await callLLM(buildScoringMessages(job, profile), activeProvider, providerConfig);
+      const r = parseScoreReply(raw);
+      item.score = r.score;
+      item.score_priority = r.priority;
+      item.score_reason = r.reason;
+      item.score_concerns = r.concerns;
+      item.score_pitch = r.pitch || '';
+      item.score_resume_version = r.resume_version || '';
+      progress++;
+    } catch (e) {
+      failed++;
+      log(`  ✗ 打分失败 [${item.job_name || k}]: ${e.message}`);
+      return { error: e.message };
+    }
+    pipelineState.score = { done: progress, total: targetKeys.length, failed };
+    pipelineState.substep = `打分 ${progress}/${targetKeys.length}${failed ? ` (失败 ${failed})` : ''} · ${item.job_name || ''}`.slice(0, 80);
     chrome.runtime.sendMessage({
       type: 'score_progress',
       done: progress,
       total: targetKeys.length,
+      failed,
     }).catch(() => {});
+    await persistMaybe();
     return true;
   });
 
   await withConcurrency(tasks, 3);
-  await setJobsMap(jobsMap);
-  log(`✓ 打分完成: 新增 ${targetKeys.length} 条`);
-  return { scored: targetKeys.length, skipped: allKeys.length - targetKeys.length };
+  await persistMaybe(true);  // 最后强制 flush
+  const msg = `✓ 打分完成: 成功 ${progress} / 失败 ${failed}${stoppedAt ? ` / 中止 ${stoppedAt}` : ''}`;
+  log(msg);
+  return { scored: progress, failed, stopped: stoppedAt, skipped: allKeys.length - targetKeys.length };
 }
 
 // ============================================================

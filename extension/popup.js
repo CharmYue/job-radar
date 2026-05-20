@@ -608,8 +608,11 @@ $('testPush').addEventListener('click', async () => {
   if (!api.wxpusher_token || !api.wxpusher_uid) {
     alert('请先填 WxPusher token + uid'); return;
   }
-  // 先保存一次,确保 background 拿到最新值
-  await chrome.runtime.sendMessage({ type: 'save_api', api });
+  // 先读 storage 里现有 api(providers / LLM key),只覆盖 WxPusher 字段后保存
+  // 否则 setApiConfig 会把 providers 重置成 DEFAULT(LLM key 全没)
+  const exist = await chrome.runtime.sendMessage({ type: 'get_api' });
+  const merged = (exist && exist.ok) ? { ...exist.api, ...api } : api;
+  await chrome.runtime.sendMessage({ type: 'save_api', api: merged });
   const today = new Date().toISOString().slice(0, 10);
   const md = `## ✅ Boss 雷达 — 推送测试 ${today}\n\n收到这条说明 WxPusher 配通了。`;
   try {

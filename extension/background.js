@@ -1082,15 +1082,14 @@ const DEFAULT_PROFILE = {
   summary: '',
   resume_md: '',
   target_monthly_min: 30000,
-  target_monthly_ideal: 40000,
-  s_tier_roles: [],
-  a_tier_roles: [],
+  target_monthly_max: 50000,
+  target_annual: 500000,
   hard_reject: [],
   cities: ['上海', '杭州', '北京'],
   beijing_salary_premium: 0.10,
   // 偏好权重(1-5 颗星,5 = 最看重)
+  // 注:role_fit 不在用户控制范围 — 系统默认按 LLM 判断的"对口度"满档加权
   priorities: {
-    role_fit: 5,
     salary: 3,
     brand: 3,
     no_overtime: 3,
@@ -1131,6 +1130,17 @@ const DEFAULT_API = {
 async function getProfile() {
   const r = await chrome.storage.local.get('profile');
   const raw = r.profile || {};
+
+  // 迁移:target_monthly_ideal → target_monthly_max (旧字段名)
+  if (raw.target_monthly_ideal && !raw.target_monthly_max) {
+    raw.target_monthly_max = raw.target_monthly_ideal;
+    delete raw.target_monthly_ideal;
+  }
+  // 旧 priorities 含 role_fit 的清掉(由系统默认满档,不暴露)
+  if (raw.priorities && 'role_fit' in raw.priorities) {
+    delete raw.priorities.role_fit;
+  }
+  // 旧 s_tier_roles / a_tier_roles 字段不再使用,但保留在 storage 不动(LLM prompt 不再读)
   return {
     ...DEFAULT_PROFILE,
     ...raw,
@@ -1238,12 +1248,11 @@ function buildScoringMessages(job, profile) {
   const user = `## 候选人 summary
 ${(profile.summary || '').trim()}
 ${resumeSection}
-目标月薪:最低 ${profile.target_monthly_min},理想 ${profile.target_monthly_ideal}。
-S 级目标岗位:${JSON.stringify(profile.s_tier_roles || [])}
-A 级目标岗位:${JSON.stringify(profile.a_tier_roles || [])}
+薪资期望:
+- 月薪 ${Math.round(profile.target_monthly_min / 1000)}K - ${Math.round(profile.target_monthly_max / 1000)}K
+- 年包目标 ${Math.round(profile.target_annual / 1000)}K (含底薪+奖金+股票/期权)
 
-## 候选人偏好(1-5 颗星,5 = 最看重,1 = 不在乎)
-- 岗位精准匹配 (role_fit): ${star('role_fit', 5)}/5
+## 候选人偏好权重(1-5 颗星,5 = 最看重)
 - 薪资 (compensation): ${star('salary', 3)}/5
 - 大厂背景 (brand): ${star('brand', 3)}/5
 - 不加班 / work-life: ${star('no_overtime', 3)}/5
@@ -1252,7 +1261,7 @@ A 级目标岗位:${JSON.stringify(profile.a_tier_roles || [])}
 - 技术栈契合: ${star('tech_fit', 3)}/5
 
 ${homeLine}
-其他偏好(用户自由文本,可能含硬性规则): ${(profile.other_prefs || '').trim() || '(无)'}
+其他偏好(自由文本,可能含硬性规则): ${(profile.other_prefs || '').trim() || '(无)'}
 
 ## 岗位
 公司:${job.company}
@@ -1263,24 +1272,29 @@ JD/字段:
 ${job.jd}
 
 ## 评分规则
-0-100 分,**按用户星级动态加权各维度**(每个维度的影响力 ≈ 该维度星级 ÷ 5)。
+0-100 分。**你需要自己从简历推断哪类岗位对候选人是 S(完美对口)/ A(高度相关,可投)/ B(相关但有 stretch)/ C(勉强相关)/ Reject(基本不沾边或硬拒)**。
 
-维度清单:
-- role_fit: 命中 S 级 → 大幅加分(可达满档);A 级 → 加分;纯算法/外包/培训类 → 大扣分
-- compensation_fit: 月薪低于 ${Math.round(profile.target_monthly_min * 0.93 / 1000)}K 大扣分;${Math.round(profile.target_monthly_ideal / 1000)}K+ 满分;不写薪资或写"待议"按中性处理
+判定逻辑:
+- 简历显示 AI 应用开发 + 解决方案/客户支持背景 → AI Solution Engineer / Customer Engineer / Solution Architect 类 = S 级
+- 简历技术栈匹配且方向相关 → LLM 应用 / Agent 开发 / RAG / TAM / 客户成功 = A 级
+- 相关但需要拉伸(纯前端 / 纯后端 / 纯产品)= B 级
+- 纯算法研究 / 模型训练 / 数据标注 / 外包驻场 / 培训讲师 → C 或 Reject(硬拒)
+
+打分维度(按用户偏好星级动态加权):
+- role_fit (系统满档权重,基础维度):你判定的 S/A/B 等级直接驱动这维度
+- compensation_fit (★${star('salary', 3)}): 月薪低于 ${Math.round(profile.target_monthly_min * 0.93 / 1000)}K 大扣分;${Math.round(profile.target_monthly_max / 1000)}K+ 满分;能算出年包接近 ${Math.round(profile.target_annual / 1000)}K 的加分
 - experience_fit: 1-3 年或 2-5 年加分;明确要求 5 年以上 → 扣分
-- tech_stack_fit: 命中候选人简历技术栈(LLM/RAG/Agent/Azure/Entra ID/FastAPI 等)加分
-- brand: 大厂(BAT/字节/华为/微软/Google 等)/独角兽/外资 → 加分;无名小公司减分。**星级 4-5 时**这维度权重显著提升
-- stability: 已上市 / D 轮及以上 / 不需要融资 → 加分;天使-A 轮 → 减分;星级 4-5 时维度权重提升
-- work_life_balance: 推断加班风险信号 — 大厂 + 互联网 + 包晚餐 + 加班补助 = **高加班风险**;周末双休 + 弹性工作 + 五险一金齐 + 不需要融资行业 = 低加班。**no_overtime 星级 ≥ 4 时,高加班岗位务必扣分 + 在 concerns 写"加班风险高"**
-- commute_fit: 用 home_district 和岗位 area 字段粗判通勤 — 同城同区 → 加分;同城不同区 → 中性;远郊到中心 → 扣分;明显跨区(浦东到长宁、海淀到通州)→ **commute 星级 ≥ 4 时扣分 + concerns 写"通勤超过 X 小时"**
+- tech_stack_fit (★${star('tech_fit', 3)}): 命中候选人技术栈(LLM/RAG/Agent/Azure/Entra ID/FastAPI 等)加分
+- brand (★${star('brand', 3)}): 大厂(BAT/字节/华为/微软/Google)/独角兽/外资 → 加分;星级 4-5 时这维度权重显著提升
+- stability (★${star('stability', 3)}): 已上市 / D 轮+ / 不需要融资 → 加分;天使-A 轮 → 减分
+- work_life_balance (★${star('no_overtime', 3)}): 推断加班风险 — 大厂互联网+包晚餐+加班补助 = **高加班**;周末双休+弹性工作+不需要融资行业 = 低加班。星级 ≥4 时高加班岗位务必扣分 + concerns 写 "加班风险高"
+- commute_fit (★${star('commute', 3)}): 拿 home_district 和岗位 area 粗判 — 同区 → 加分;跨江(浦东↔浦西)/ 跨主要分区 → 扣分;星级 ≥4 时 concerns 写 "通勤超过 X 分钟"
 
-## 北京软提示规则(老规则保留)
-若岗位城市是"北京",且薪资相比上海/杭州同档岗高出比例不足 ${Math.round(premium * 100)}%,
-concerns 里追加 "北京无户口,薪资溢价不足(${Math.round(premium * 100)}%)"。**不要**因此 Reject。
+## 北京软提示规则
+若岗位城市是"北京"且薪资相比沪/杭同档高出不足 ${Math.round(premium * 100)}%,concerns 追加 "北京无户口,薪资溢价不足"。**不**因此 Reject。
 
 ## 硬性偏好规则
-"其他偏好"中若含硬性规则(如"不投朝阳区"、"35K 以下不投"、"讨厌外包"等),命中即将 priority 降一档或 Reject,并在 concerns 写明。
+"其他偏好"含硬性规则(如"不投朝阳区"、"35K 以下不投"等),命中即降档或 Reject,在 concerns 写明。
 
 ## 分档
 S ≥ 90, A ≥ 70, B ≥ 55, C ≥ 40, Reject < 40。

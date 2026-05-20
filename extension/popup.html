@@ -491,6 +491,31 @@
     line-height: 1;
   }
   .prio-stars span.filled { color: #f0a040; }
+
+  /* ─────────── Sliders ─────────── */
+  .slider-row {
+    margin-top: 8px;
+  }
+  .slider-row label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #4b5563;
+    margin-bottom: 2px;
+  }
+  .slider-val {
+    font-weight: 600;
+    color: #1d3557;
+    font-size: 13px;
+  }
+  input[type=range] {
+    width: 100%;
+    accent-color: #1d3557;
+    padding: 0;
+    border: none;
+    background: transparent;
+  }
+  input[type=range]:focus { outline: none; }
   .section-title {
     font-size: 12px;
     color: #1d3557;
@@ -529,41 +554,31 @@
       <span class="hint">画像 + API key 越全,打分越准</span>
     </div>
     <div class="checklist" id="completionChecklist"></div>
-    <div class="btns">
-      <button id="importYaml" class="outline">📥 从 profile.yaml 导入</button>
-      <button id="importResume" class="outline">📄 从 resume.md 导入</button>
-    </div>
-    <input type="file" id="yamlFile" accept=".yaml,.yml" style="display:none">
-    <input type="file" id="resumeFile" accept=".md,.txt" style="display:none">
   </div>
 
   <div class="card">
-    <div class="card-title">候选人画像</div>
+    <div class="card-title">候选人画像 <span class="hint">S/A 等级由 AI 根据简历自动判断</span></div>
     <label>一句话 summary(技术栈 + 年限 + 方向)</label>
     <textarea id="pfSummary" rows="2"></textarea>
 
-    <label style="margin-top:8px;display:block">完整简历(Markdown)</label>
-    <textarea id="pfResume" rows="5"></textarea>
+    <label style="margin-top:8px;display:block">完整简历(Markdown,LLM 全文读 → 决定哪些岗位是 S/A/B)</label>
+    <textarea id="pfResume" rows="6"></textarea>
 
-    <div class="row">
-      <div>
-        <label>最低月薪 (元)</label>
-        <input type="number" id="pfMonthlyMin" value="30000" min="0" step="1000">
-      </div>
-      <div>
-        <label>理想月薪 (元)</label>
-        <input type="number" id="pfMonthlyIdeal" value="40000" min="0" step="1000">
-      </div>
+    <div class="slider-row">
+      <label>最低月薪 <span class="slider-val" id="pfMonthlyMinVal">30K</span></label>
+      <input type="range" id="pfMonthlyMin" min="5" max="100" step="1" value="30">
+    </div>
+    <div class="slider-row">
+      <label>最高月薪 <span class="slider-val" id="pfMonthlyMaxVal">50K</span></label>
+      <input type="range" id="pfMonthlyMax" min="5" max="100" step="1" value="50">
+    </div>
+    <div class="slider-row">
+      <label>年包目标 <span class="slider-val" id="pfAnnualVal">500K</span></label>
+      <input type="range" id="pfAnnual" min="100" max="2000" step="50" value="500">
     </div>
 
-    <label style="margin-top:8px;display:block">S 级目标岗位(命中即满档加分)</label>
-    <textarea id="pfSTier" rows="3" placeholder="每行一个,例如: AI Solution Engineer"></textarea>
-
-    <label style="margin-top:8px;display:block">A 级目标岗位(相关但非首选)</label>
-    <textarea id="pfATier" rows="3"></textarea>
-
     <label style="margin-top:8px;display:block">硬拒关键词(命中直接 Reject,不调 API)</label>
-    <textarea id="pfHardReject" rows="3"></textarea>
+    <textarea id="pfHardReject" rows="3" placeholder="每行一个,如: 算法研究员 / 外包驻场 / 培训讲师"></textarea>
   </div>
 
   <div class="card">

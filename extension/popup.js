@@ -56,8 +56,7 @@ async function refreshOnboardingBanner() {
   const banner = $('banner');
   const missing = [];
   if (!p.summary) missing.push('summary');
-  if (!p.resume_md) missing.push('简历');
-  if (!p.s_tier_roles || p.s_tier_roles.length === 0) missing.push('S 级关键词');
+  if (!p.resume_md || p.resume_md.length < 100) missing.push('简历');
   const active = a.provider || 'deepseek';
   const cfg = (a.providers && a.providers[active]) || {};
   if (!cfg.api_key) missing.push('LLM API key');
@@ -159,9 +158,8 @@ document.querySelectorAll('.tab').forEach((t) => {
 // ============================================================
 // 画像:完成度 checklist + load/save + yaml/resume 导入
 // ============================================================
-// 偏好维度 - 用于 star UI 渲染
+// 偏好维度 - 用于 star UI 渲染(role_fit 系统默认满档,不暴露)
 const PRIORITY_DIMS = [
-  { key: 'role_fit',    label: '岗位精准匹配',  hint: '命中 S/A 关键词' },
   { key: 'salary',      label: '薪资',          hint: '高于目标月薪权重' },
   { key: 'brand',       label: '大厂背景',      hint: 'BAT/字节/外资' },
   { key: 'no_overtime', label: '不加班',        hint: 'work-life balance' },
@@ -204,15 +202,20 @@ function renderPriorityStars() {
   }
 }
 
+function setSlider(id, valueK) {
+  $(id).value = valueK;
+  $(id + 'Val').textContent = valueK >= 1000 ? `${valueK / 1000}M` : `${valueK}K`;
+}
+
 async function loadProfileIntoUI() {
   const r = await chrome.runtime.sendMessage({ type: 'get_profile' });
   const p = (r && r.ok) ? r.profile : {};
   $('pfSummary').value = p.summary || '';
   $('pfResume').value = p.resume_md || '';
-  $('pfMonthlyMin').value = p.target_monthly_min || 30000;
-  $('pfMonthlyIdeal').value = p.target_monthly_ideal || 40000;
-  $('pfSTier').value = (p.s_tier_roles || []).join('\n');
-  $('pfATier').value = (p.a_tier_roles || []).join('\n');
+  // sliders 存 K (千元)
+  setSlider('pfMonthlyMin', Math.round((p.target_monthly_min || 30000) / 1000));
+  setSlider('pfMonthlyMax', Math.round((p.target_monthly_max || p.target_monthly_ideal || 50000) / 1000));
+  setSlider('pfAnnual', Math.round((p.target_annual || 500000) / 1000));
   $('pfHardReject').value = (p.hard_reject || []).join('\n');
   $('pfHomeDistrict').value = p.home_district || '';
   $('pfOtherPrefs').value = p.other_prefs || '';
@@ -291,9 +294,7 @@ function renderChecklist(p, a) {
   const items = [
     { label: 'summary', ok: !!p.summary },
     { label: '完整简历', ok: !!p.resume_md && p.resume_md.length > 100 },
-    { label: '目标月薪', ok: !!(p.target_monthly_min && p.target_monthly_ideal) },
-    { label: 'S 级关键词', ok: (p.s_tier_roles || []).length > 0 },
-    { label: 'A 级关键词', ok: (p.a_tier_roles || []).length > 0 },
+    { label: '薪资期望', ok: !!(p.target_monthly_min && p.target_monthly_max) },
     { label: '硬拒关键词', ok: (p.hard_reject || []).length > 0 },
     { label: `${providerName} API key`, ok: !!providerCfg.api_key },
     { label: 'WxPusher Token', ok: !!a.wxpusher_token },
@@ -318,10 +319,9 @@ function profileFromUI() {
   return {
     summary: $('pfSummary').value.trim(),
     resume_md: $('pfResume').value,
-    target_monthly_min: parseInt($('pfMonthlyMin').value) || 30000,
-    target_monthly_ideal: parseInt($('pfMonthlyIdeal').value) || 40000,
-    s_tier_roles: linesToArray($('pfSTier').value),
-    a_tier_roles: linesToArray($('pfATier').value),
+    target_monthly_min: (parseInt($('pfMonthlyMin').value) || 30) * 1000,
+    target_monthly_max: (parseInt($('pfMonthlyMax').value) || 50) * 1000,
+    target_annual: (parseInt($('pfAnnual').value) || 500) * 1000,
     hard_reject: linesToArray($('pfHardReject').value),
     priorities: { ...CURRENT_PRIORITIES },
     home_district: $('pfHomeDistrict').value.trim(),
@@ -366,113 +366,36 @@ function apiFromUI() {
   };
 }
 
-// ─────────────────────── YAML 导入 ───────────────────────
-function parseSimpleYaml(text) {
-  // 仅支持 candidate.* 这种简单结构 + 顶层 key
-  // 支持: key: value, key: |\n  multiline, key:\n  - item, # 注释
-  const lines = text.split(/\r?\n/);
-  const out = {};
-  let i = 0;
-  function readBlockScalar(indent) {
-    const buf = [];
-    while (i < lines.length) {
-      const ln = lines[i];
-      if (ln.trim() === '' || /^\s*#/.test(ln)) { i++; continue; }
-      const m = ln.match(/^(\s*)(.*)$/);
-      if (!m || m[1].length < indent) break;
-      buf.push(ln.slice(indent));
-      i++;
-    }
-    return buf.join('\n');
-  }
-  function readArray(indent) {
-    const arr = [];
-    while (i < lines.length) {
-      const ln = lines[i];
-      if (ln.trim() === '' || /^\s*#/.test(ln)) { i++; continue; }
-      const m = ln.match(/^(\s*)-\s*(.*)$/);
-      if (!m || m[1].length < indent) break;
-      arr.push(m[2].trim().replace(/^["']|["']$/g, ''));
-      i++;
-    }
-    return arr;
-  }
-  function readObject(indent) {
-    const obj = {};
-    while (i < lines.length) {
-      const ln = lines[i];
-      if (ln.trim() === '' || /^\s*#/.test(ln)) { i++; continue; }
-      const m = ln.match(/^(\s*)([\w\-]+):\s*(.*)$/);
-      if (!m || m[1].length < indent) break;
-      if (m[1].length > indent) { i++; continue; }
-      const key = m[2];
-      let val = m[3];
-      i++;
-      if (val === '|' || val === '>') {
-        // block scalar
-        // find indent of next non-empty
-        let childIndent = indent + 2;
-        while (i < lines.length && lines[i].trim() === '') i++;
-        if (i < lines.length) {
-          const cm = lines[i].match(/^(\s*)/);
-          if (cm) childIndent = cm[1].length;
-        }
-        obj[key] = readBlockScalar(childIndent);
-      } else if (val === '') {
-        // could be nested obj or array
-        let childIndent = indent + 2;
-        while (i < lines.length && (lines[i].trim() === '' || /^\s*#/.test(lines[i]))) i++;
-        if (i < lines.length) {
-          const cm = lines[i].match(/^(\s*)/);
-          if (cm) childIndent = cm[1].length;
-        }
-        if (i < lines.length && /^\s*-\s/.test(lines[i])) {
-          obj[key] = readArray(childIndent);
-        } else {
-          obj[key] = readObject(childIndent);
-        }
-      } else {
-        // inline scalar
-        let v = val.trim();
-        if (/^-?\d+(\.\d+)?$/.test(v)) v = parseFloat(v);
-        else v = v.replace(/^["']|["']$/g, '');
-        obj[key] = v;
-      }
-    }
-    return obj;
-  }
-  return readObject(0);
+// ─────────────────────── Slider 实时值显示 ───────────────────────
+function bindSlider(id) {
+  const el = $(id);
+  const out = $(id + 'Val');
+  if (!el || !out) return;
+  el.addEventListener('input', () => {
+    const v = parseInt(el.value);
+    out.textContent = v >= 1000 ? `${v / 1000}M` : `${v}K`;
+  });
 }
+bindSlider('pfMonthlyMin');
+bindSlider('pfMonthlyMax');
+bindSlider('pfAnnual');
 
-$('importYaml').addEventListener('click', () => $('yamlFile').click());
-$('yamlFile').addEventListener('change', async (e) => {
-  const f = e.target.files[0];
-  if (!f) return;
-  try {
-    const text = await f.text();
-    const parsed = parseSimpleYaml(text);
-    const cand = parsed.candidate || parsed;
-    if (cand.summary) $('pfSummary').value = String(cand.summary).trim();
-    if (cand.target_monthly_min) $('pfMonthlyMin').value = parseInt(cand.target_monthly_min);
-    if (cand.target_monthly_ideal) $('pfMonthlyIdeal').value = parseInt(cand.target_monthly_ideal);
-    if (Array.isArray(cand.s_tier_roles)) $('pfSTier').value = cand.s_tier_roles.join('\n');
-    if (Array.isArray(cand.a_tier_roles)) $('pfATier').value = cand.a_tier_roles.join('\n');
-    if (Array.isArray(cand.hard_reject)) $('pfHardReject').value = cand.hard_reject.join('\n');
-    appendLog(`✓ 已从 ${f.name} 导入,记得点保存`);
-    alert(`已读 ${f.name} 的字段,确认后点「保存」`);
-  } catch (err) {
-    alert('解析失败:' + err.message);
+// 月薪上下限联动:Min 不能超过 Max
+$('pfMonthlyMin').addEventListener('input', () => {
+  const mn = parseInt($('pfMonthlyMin').value);
+  const mx = parseInt($('pfMonthlyMax').value);
+  if (mn > mx) {
+    $('pfMonthlyMax').value = mn;
+    $('pfMonthlyMaxVal').textContent = `${mn}K`;
   }
-  e.target.value = '';
 });
-$('importResume').addEventListener('click', () => $('resumeFile').click());
-$('resumeFile').addEventListener('change', async (e) => {
-  const f = e.target.files[0];
-  if (!f) return;
-  const text = await f.text();
-  $('pfResume').value = text;
-  appendLog(`✓ 已从 ${f.name} 导入简历,记得点保存`);
-  e.target.value = '';
+$('pfMonthlyMax').addEventListener('input', () => {
+  const mn = parseInt($('pfMonthlyMin').value);
+  const mx = parseInt($('pfMonthlyMax').value);
+  if (mx < mn) {
+    $('pfMonthlyMin').value = mx;
+    $('pfMonthlyMinVal').textContent = `${mx}K`;
+  }
 });
 
 $('apiProvider').addEventListener('change', onProviderSwitch);

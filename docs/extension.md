@@ -22,25 +22,17 @@ Chrome MV3 扩展,三段式架构 + AI 打分 + WxPusher 推送一体化:
 
 打开扩展默认停在 **画像** tab。顶部 banner 会提示哪些字段还没填、引导到正确位置。
 
-**最快路径:从 yaml 导入**
-- 点 **📥 从 profile.yaml 导入** → 选 `~/job-radar/config/profile.yaml` → 字段自动填好
-- 点 **📄 从 resume.md 导入** → 选 `~/job-radar/data/resume.md` → 简历自动填好
-- 补 API key 三项(DeepSeek + WxPusher token + WxPusher uid)
-- 点 **保存** → 顶部 banner 变绿色「✅ 画像就绪」
-
-**手填**(没有 yaml 文件时):
+填以下字段:
 
 | 字段 | 干啥 |
 |---|---|
 | **summary** | 一句话技术栈 + 年限,LLM 第一眼读 |
-| **完整简历** | Markdown 粘贴,LLM 全文读,会和 summary 冲突时以简历为准 |
-| **最低月薪 / 理想月薪** | 用于打分时的 compensation_fit 权重 |
-| **S 级目标岗位** | 每行一个,LLM 命中即满档加分 |
-| **A 级目标岗位** | 相关但非首选,LLM 加分 |
-| **硬拒关键词** | 每行一个,命中即本地直接 Reject,**不调 API** |
+| **完整简历** | Markdown 粘贴,LLM 全文读 — **S/A/B/C 等级由 LLM 根据简历自动判断**,不再手动配 |
+| **最低月薪 / 最高月薪 / 年包目标** | 3 个滑块,K = 千元;月薪范围用于 compensation_fit 权重;年包用于综合判断岗位 stock+bonus 是否够 |
+| **硬拒关键词** | 每行一个,命中即本地直接 Reject,**不调 API**(如 `算法研究员`、`外包驻场`) |
 | **LLM provider + API key** | 7 选 1:DeepSeek / 通义千问 / 豆包 / MiniMax / 智谱 / OpenAI / Claude — 各家 key 独立存,切换不丢 |
 | **WxPusher App Token + UID** | wxpusher.zjiecode.com 注册拿,免费 |
-| **🎚️ 偏好权重** | 7 个维度 1-5 颗星(role_fit / salary / brand / no_overtime / stability / commute / tech_fit),决定打分时各维度权重 |
+| **🎚️ 偏好权重** | 6 个维度 1-5 颗星(salary / brand / no_overtime / stability / commute / tech_fit),决定各维度权重(role_fit 由系统默认满档) |
 | **🏠 住址** | 用于通勤评估(如 `上海·浦东·张江`)— 配合 commute 星级 |
 | **📝 其他偏好** | 自由文本,可写硬性规则:"不投朝阳区" / "讨厌外包" / "35K 以下不投" 等,LLM 会命中即降档 |
 

@@ -708,6 +708,13 @@
     <button id="runPipeline" class="huge green">🚀 跑一轮</button>
     <button id="stopPipeline" class="huge red" style="display:none">■ 停止</button>
 
+    <div style="margin-top:8px;font-size:11px;color:#4b5563">
+      <label style="cursor:pointer">
+        <input type="checkbox" id="autoDaily" style="margin-right:4px">
+        每天 <input type="number" id="autoDailyHour" value="9" min="0" max="23" style="width:36px;padding:1px 2px;font-size:11px">:00 起,Chrome 开着就自动跑
+      </label>
+    </div>
+
     <div style="margin-top:8px;display:flex;justify-content:space-between;font-size:11px;color:#6b7280">
       <span>数据池: <b id="poolTotal">0</b></span>
       <span id="progress"></span>

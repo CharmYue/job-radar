@@ -20,6 +20,7 @@ async function init() {
   bindEvents();
   // 默认 tab 是 profile,需显式初始化一次内容
   await loadProfileIntoUI();
+  await loadAutoDaily();
   await refreshAll();
   setInterval(refreshAll, 2500);
 }
@@ -868,6 +869,22 @@ document.querySelectorAll('#resultFilters .fchip').forEach((c) => {
 });
 
 // ─────────────────────── Pipeline 按钮 ───────────────────────
+// 每日自动跑 toggle
+async function loadAutoDaily() {
+  const r = await chrome.runtime.sendMessage({ type: 'get_auto_daily' });
+  const s = (r && r.ok) ? r.autoDaily : { enabled: false, hour: 9 };
+  $('autoDaily').checked = !!s.enabled;
+  $('autoDailyHour').value = typeof s.hour === 'number' ? s.hour : 9;
+}
+async function saveAutoDaily() {
+  const enabled = $('autoDaily').checked;
+  const hour = parseInt($('autoDailyHour').value) || 9;
+  await chrome.runtime.sendMessage({ type: 'save_auto_daily', autoDaily: { enabled, hour } });
+  appendLog(enabled ? `✓ 每日自动跑已开启 (${hour}:00 起检测)` : '✓ 已关闭每日自动跑');
+}
+$('autoDaily').addEventListener('change', saveAutoDaily);
+$('autoDailyHour').addEventListener('change', saveAutoDaily);
+
 $('runPipeline').addEventListener('click', async () => {
   const pc = (await chrome.storage.local.get('pendingConfig')).pendingConfig;
   if (!pc?.tasks?.length) {

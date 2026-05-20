@@ -98,13 +98,47 @@ async function setJobsMap(m) {
   await chrome.storage.local.set({ jobs: m });
 }
 
-// SW 保活: 30 秒周期的 alarm(Chrome 最小合规周期),仅在运行中起意义
+// SW 保活: 30 秒周期 + 每日定时检查
 chrome.alarms.create('keepalive', { periodInMinutes: 0.5 });
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'keepalive') {
-    // noop,触发 SW 保持唤醒
+chrome.alarms.create('daily-auto-pipeline', { periodInMinutes: 30 });
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === 'keepalive') return; // noop,只为保活
+  if (alarm.name === 'daily-auto-pipeline') {
+    try { await maybeAutoFire(); } catch (e) { console.warn('[daily auto]', e); }
   }
 });
+
+// 每 30 分钟检查一次:今天 ≥ 09:00 且还没自动跑过 → 自动 fire 流水线
+async function maybeAutoFire() {
+  const settings = (await chrome.storage.local.get('autoDaily')).autoDaily;
+  if (!settings || !settings.enabled) return;
+
+  const now = new Date();
+  const targetHour = typeof settings.hour === 'number' ? settings.hour : 9;
+  if (now.getHours() < targetHour) return;
+
+  const today = now.toISOString().slice(0, 10);
+  const meta = (await chrome.storage.local.get('autoDailyMeta')).autoDailyMeta || {};
+  if (meta.lastRunDate === today) return;
+
+  if (pipelineState.stage === 'crawling' ||
+      pipelineState.stage === 'scoring' ||
+      pipelineState.stage === 'pushing') return;
+  if (state.running) return;
+
+  const pc = (await chrome.storage.local.get('pendingConfig')).pendingConfig;
+  if (!pc || !pc.tasks || pc.tasks.length === 0) {
+    log('⚠ 每日自动跑跳过:还没生成搜索队列,先到「搜索」tab 生成一次');
+    // 不设 lastRunDate,避免锁住后续日子
+    return;
+  }
+
+  log(`▶ 每日自动 fire (${today} ${now.toTimeString().slice(0, 5)})`);
+  await chrome.storage.local.set({ autoDailyMeta: { ...meta, lastRunDate: today } });
+  // 重置队列状态(让 startCrawl 从 pending 状态开始)
+  await chrome.storage.local.remove('taskQueue');
+  runPipeline({ ...pc, resume: false }).catch((e) => log(`✗ 自动跑失败: ${e.message}`));
+}
 
 // 窗口被手动关闭时优雅清理 (独立窗口模式)
 chrome.windows.onRemoved.addListener((windowId) => {
@@ -393,6 +427,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           break;
         case 'clear_history':
           await chrome.storage.local.remove('history');
+          sendResponse({ ok: true });
+          break;
+        case 'get_auto_daily': {
+          const s = (await chrome.storage.local.get('autoDaily')).autoDaily || { enabled: false, hour: 9 };
+          sendResponse({ ok: true, autoDaily: s });
+          break;
+        }
+        case 'save_auto_daily':
+          await chrome.storage.local.set({ autoDaily: msg.autoDaily });
           sendResponse({ ok: true });
           break;
         case 'clear_scores': {
@@ -1272,51 +1315,8 @@ async function scoreAllUnscored() {
 }
 
 // ============================================================
-// 推送 — WxPusher (port from src/job_radar/{report,push}.py)
+// 推送 — WxPusher (per-tier split to avoid 10K truncation)
 // ============================================================
-function buildCompactReport(scoredItems, dateStr) {
-  const byPrio = { S: [], A: [], B: [], C: [], Reject: [] };
-  for (const it of scoredItems) {
-    const p = it.score_priority || 'C';
-    (byPrio[p] || byPrio.C).push(it);
-  }
-  for (const k of Object.keys(byPrio)) {
-    byPrio[k].sort((a, b) => (b.score || 0) - (a.score || 0));
-  }
-  const total = scoredItems.length;
-  const counts = {
-    S: byPrio.S.length,
-    A: byPrio.A.length,
-    B: byPrio.B.length,
-    C: byPrio.C.length,
-    Reject: byPrio.Reject.length,
-  };
-
-  const lines = [
-    `## 🎯 Boss 求职雷达 ${dateStr}`,
-    `> 共 ${total} | S=${counts.S} | A=${counts.A} | B=${counts.B} | C=${counts.C} | R=${counts.Reject}`,
-    '',
-  ];
-
-  const emit = (prio, label) => {
-    const items = byPrio[prio] || [];
-    if (items.length === 0) return;
-    lines.push(`### ${label} (${items.length})`);
-    for (const it of items) {
-      lines.push(`[${it.score || 0}] ${it.job_name} — ${it.salary || '待议'} — ${it.city || it.search_city || ''}`);
-      if (it.job_url) lines.push(it.job_url);
-      lines.push('');
-    }
-  };
-  emit('S', '🌟 S');
-  emit('A', '🟢 A');
-  emit('B', '🟡 B');
-
-  return {
-    md: lines.join('\n').replace(/\s+$/, '') + '\n',
-    counts,
-  };
-}
 
 async function pushWxPusher(md, summary, apiToken, uid) {
   const MAX_CONTENT = 10000;
@@ -1344,6 +1344,26 @@ async function pushWxPusher(md, summary, apiToken, uid) {
   return data;
 }
 
+function buildTierReport(items, tier, label, dateStr, totalCounts) {
+  if (items.length === 0) return null;
+  const lines = [
+    `## ${label} (${items.length}) — ${dateStr}`,
+    `> 总览: S=${totalCounts.S} | A=${totalCounts.A} | B=${totalCounts.B} | C=${totalCounts.C} | R=${totalCounts.Reject}`,
+    '',
+  ];
+  for (const it of items) {
+    const city = it.city || it.search_city || '';
+    lines.push(`**[${it.score || 0}] ${it.job_name}** — ${it.company_name || ''}`);
+    lines.push(`💰 ${it.salary || '待议'} · 📍 ${city}${it.area ? '·' + it.area : ''}${it.experience ? ' · ' + it.experience : ''}`);
+    if (it.score_reason) lines.push(`> ${it.score_reason}`);
+    if (it.score_concerns && it.score_concerns.length) lines.push(`⚠️ ${it.score_concerns.join(' / ')}`);
+    if (it.score_pitch) lines.push(`💬 ${it.score_pitch}`);
+    if (it.job_url) lines.push(`🔗 ${it.job_url}`);
+    lines.push('');
+  }
+  return lines.join('\n').replace(/\s+$/, '') + '\n';
+}
+
 async function pushNow() {
   const api = await getApiConfig();
   if (!api.wxpusher_token || !api.wxpusher_uid) {
@@ -1356,10 +1376,40 @@ async function pushNow() {
   if (items.length === 0) throw new Error('没有已打分的岗位,请先点「AI 全部打分」');
 
   const today = new Date().toISOString().slice(0, 10);
-  const { md, counts } = buildCompactReport(items, today);
-  const summary = `Boss 雷达 ${today} | ${counts.S} S / ${counts.A} A`;
-  await pushWxPusher(md, summary, api.wxpusher_token, api.wxpusher_uid);
-  log(`✓ WxPusher 推送成功: ${summary}`);
+
+  // 统计 + 分桶
+  const byPrio = { S: [], A: [], B: [], C: [], Reject: [] };
+  for (const it of items) (byPrio[it.score_priority] || byPrio.C).push(it);
+  for (const k of Object.keys(byPrio)) {
+    byPrio[k].sort((a, b) => (b.score || 0) - (a.score || 0));
+  }
+  const counts = {
+    S: byPrio.S.length, A: byPrio.A.length, B: byPrio.B.length,
+    C: byPrio.C.length, Reject: byPrio.Reject.length,
+  };
+
+  // 按等级分推:S 一条 + A 一条(只发有内容的)
+  let pushed = 0;
+  const sMd = buildTierReport(byPrio.S, 'S', '🌟 S 级 — 今天优先投', today, counts);
+  if (sMd) {
+    await pushWxPusher(sMd, `Boss 雷达 ${today} · S 级 ${counts.S} 条`, api.wxpusher_token, api.wxpusher_uid);
+    log(`✓ WxPusher 推送 S 级 ${counts.S} 条`);
+    pushed++;
+  }
+  const aMd = buildTierReport(byPrio.A, 'A', '🟢 A 级 — 值得投', today, counts);
+  if (aMd) {
+    await pushWxPusher(aMd, `Boss 雷达 ${today} · A 级 ${counts.A} 条`, api.wxpusher_token, api.wxpusher_uid);
+    log(`✓ WxPusher 推送 A 级 ${counts.A} 条`);
+    pushed++;
+  }
+  // S=0 且 A=0 时,发一条"今天没好岗"以让用户知道流水线跑了但没产出
+  if (pushed === 0) {
+    const md = `## 🎯 Boss 雷达 ${today}\n\n> 共 ${items.length} 个岗位,S=0 A=0\n\n今天没有 S/A 级岗位。B=${counts.B} C=${counts.C} 在扩展数据池里查看。`;
+    await pushWxPusher(md, `Boss 雷达 ${today} · 无 S/A`, api.wxpusher_token, api.wxpusher_uid);
+    log(`✓ WxPusher 推送(无 S/A)`);
+  }
+
+  const summary = `${counts.S} S / ${counts.A} A`;
 
   // 写入历史
   await appendHistory({

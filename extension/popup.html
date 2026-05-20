@@ -633,10 +633,12 @@
       </div>
     </div>
 
-    <div class="btns">
+    <div class="btns" style="align-items:center">
       <button id="saveProfile" class="green">保存</button>
       <button id="testPush" class="outline">📨 测试推送</button>
+      <span id="autoSavedBadge" style="opacity:0;transition:opacity .3s;color:#2a9d4a;font-size:11px;padding:0 6px;flex:0 0 auto">✓ 已自动保存</span>
     </div>
+    <div class="muted" style="margin-top:6px">所有字段编辑后 ~1 秒会自动保存,不需要手动点(保存按钮是给你强制 flush 用的)</div>
   </div>
 
 </div>

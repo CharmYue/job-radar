@@ -21,6 +21,7 @@ async function init() {
   // 默认 tab 是 profile,需显式初始化一次内容
   await loadProfileIntoUI();
   await loadAutoDaily();
+  bindAutoSaveOnAll();
   await refreshAll();
   setInterval(refreshAll, 2500);
 }
@@ -194,6 +195,7 @@ function renderPriorityStars() {
       s.addEventListener('click', () => {
         CURRENT_PRIORITIES[dim.key] = i;
         renderPriorityStars();
+        scheduleAutoSave();
       });
       stars.appendChild(s);
     }
@@ -367,7 +369,7 @@ function profileFromUI() {
   };
 }
 
-async function saveProfileFromUI() {
+async function saveProfileFromUI(opts = {}) {
   // Profile
   await chrome.runtime.sendMessage({ type: 'save_profile', profile: profileFromUI() });
 
@@ -392,8 +394,56 @@ async function saveProfileFromUI() {
     },
   });
   CURRENT_ACTIVE_PROVIDER = active;
-  appendLog('✓ 画像 + API + 偏好 已保存');
-  await refreshAll();
+  if (!opts.silent) {
+    appendLog('✓ 画像 + API + 偏好 已保存');
+    await refreshAll();
+  } else {
+    // 自动保存路径:只刷 banner 完成度,不打 log
+    await refreshOnboardingBanner();
+    flashAutoSavedBadge();
+  }
+}
+
+// ─────────────────────── Autosave ───────────────────────
+let _autoSaveTimer = null;
+function scheduleAutoSave() {
+  if (_autoSaveTimer) clearTimeout(_autoSaveTimer);
+  _autoSaveTimer = setTimeout(() => {
+    saveProfileFromUI({ silent: true }).catch((e) => console.warn('[autosave]', e));
+  }, 300);
+}
+function flushAutoSave() {
+  if (_autoSaveTimer) { clearTimeout(_autoSaveTimer); _autoSaveTimer = null; }
+  saveProfileFromUI({ silent: true }).catch((e) => console.warn('[autosave-blur]', e));
+}
+
+function flashAutoSavedBadge() {
+  const b = $('autoSavedBadge');
+  if (!b) return;
+  b.style.opacity = '1';
+  clearTimeout(b._t);
+  b._t = setTimeout(() => { b.style.opacity = '0'; }, 1200);
+}
+
+function bindAutoSaveOnAll() {
+  const ids = [
+    'pfSummary', 'pfResume',
+    'pfMonthlyMin', 'pfMonthlyMax', 'pfAnnual',
+    'pfHomeDistrict', 'pfOtherPrefs',
+    'apiProviderKey', 'apiProviderModel', 'apiProviderModelCustom',
+    'apiProviderBaseUrl', 'apiWxToken', 'apiWxUid',
+  ];
+  for (const id of ids) {
+    const el = $(id);
+    if (!el) continue;
+    el.addEventListener('input', scheduleAutoSave);
+    el.addEventListener('change', scheduleAutoSave);
+    // 失焦时立刻 flush — 防止 popup 关闭丢数据
+    el.addEventListener('blur', flushAutoSave);
+  }
+  // popup 即将关闭时强 flush(不一定每次都触发,作为兜底)
+  window.addEventListener('pagehide', flushAutoSave);
+  window.addEventListener('beforeunload', flushAutoSave);
 }
 
 // API config from UI (just the API part, used by 测试推送)

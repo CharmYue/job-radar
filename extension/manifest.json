@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Boss 求职雷达",
-  "version": "4.1.0",
+  "version": "5.0.0",
   "description": "Boss直聘批量采集 + DeepSeek AI 适配度打分 + WxPusher 微信推送一体化。",
   "permissions": [
     "storage",
@@ -15,6 +15,12 @@
     "https://www.zhipin.com/*",
     "https://*.zhipin.com/*",
     "https://api.deepseek.com/*",
+    "https://dashscope.aliyuncs.com/*",
+    "https://ark.cn-beijing.volces.com/*",
+    "https://api.minimax.chat/*",
+    "https://open.bigmodel.cn/*",
+    "https://api.openai.com/*",
+    "https://api.anthropic.com/*",
     "https://wxpusher.zjiecode.com/*"
   ],
   "background": {

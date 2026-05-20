@@ -429,6 +429,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           await chrome.storage.local.remove('history');
           sendResponse({ ok: true });
           break;
+        case 'list_providers': {
+          const out = {};
+          for (const [k, v] of Object.entries(PROVIDERS)) {
+            out[k] = { name: v.name, default_model: v.default_model, base_url: v.base_url };
+          }
+          sendResponse({ ok: true, providers: out });
+          break;
+        }
         case 'get_auto_daily': {
           const s = (await chrome.storage.local.get('autoDaily')).autoDaily || { enabled: false, hour: 9 };
           sendResponse({ ok: true, autoDaily: s });
@@ -1080,26 +1088,93 @@ const DEFAULT_PROFILE = {
   hard_reject: [],
   cities: ['上海', '杭州', '北京'],
   beijing_salary_premium: 0.10,
+  // 偏好权重(1-5 颗星,5 = 最看重)
+  priorities: {
+    role_fit: 5,
+    salary: 3,
+    brand: 3,
+    no_overtime: 3,
+    stability: 3,
+    commute: 3,
+    tech_fit: 3,
+  },
+  home_district: '',
+  other_prefs: '',
 };
+
+// LLM provider 配置表
+const PROVIDERS = {
+  deepseek:  { name: 'DeepSeek',         base_url: 'https://api.deepseek.com',                          default_model: 'deepseek-chat',                protocol: 'openai'    },
+  qwen:      { name: '通义千问',         base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',  default_model: 'qwen-plus',                    protocol: 'openai'    },
+  doubao:    { name: '豆包 (火山方舟)',  base_url: 'https://ark.cn-beijing.volces.com/api/v3',           default_model: 'doubao-1-5-pro-32k-250115',    protocol: 'openai'    },
+  minimax:   { name: 'MiniMax',          base_url: 'https://api.minimax.chat/v1',                        default_model: 'abab6.5s-chat',                protocol: 'openai'    },
+  zhipu:     { name: '智谱 GLM',         base_url: 'https://open.bigmodel.cn/api/paas/v4',               default_model: 'glm-4-plus',                   protocol: 'openai'    },
+  openai:    { name: 'OpenAI GPT',       base_url: 'https://api.openai.com/v1',                          default_model: 'gpt-4o-mini',                  protocol: 'openai'    },
+  anthropic: { name: 'Claude',           base_url: 'https://api.anthropic.com/v1',                       default_model: 'claude-sonnet-4-5',            protocol: 'anthropic' },
+};
+
 const DEFAULT_API = {
-  deepseek_key: '',
+  provider: 'deepseek',
+  providers: {
+    deepseek:  { api_key: '', model: '', base_url: '' },
+    qwen:      { api_key: '', model: '', base_url: '' },
+    doubao:    { api_key: '', model: '', base_url: '' },
+    minimax:   { api_key: '', model: '', base_url: '' },
+    zhipu:     { api_key: '', model: '', base_url: '' },
+    openai:    { api_key: '', model: '', base_url: '' },
+    anthropic: { api_key: '', model: '', base_url: '' },
+  },
   wxpusher_token: '',
   wxpusher_uid: '',
 };
 
 async function getProfile() {
   const r = await chrome.storage.local.get('profile');
-  return { ...DEFAULT_PROFILE, ...(r.profile || {}) };
+  const raw = r.profile || {};
+  return {
+    ...DEFAULT_PROFILE,
+    ...raw,
+    priorities: { ...DEFAULT_PROFILE.priorities, ...(raw.priorities || {}) },
+  };
 }
 async function setProfile(p) {
-  await chrome.storage.local.set({ profile: { ...DEFAULT_PROFILE, ...p } });
+  await chrome.storage.local.set({
+    profile: {
+      ...DEFAULT_PROFILE,
+      ...p,
+      priorities: { ...DEFAULT_PROFILE.priorities, ...(p.priorities || {}) },
+    },
+  });
 }
+
 async function getApiConfig() {
   const r = await chrome.storage.local.get('apiConfig');
-  return { ...DEFAULT_API, ...(r.apiConfig || {}) };
+  const raw = r.apiConfig || {};
+
+  // 旧版迁移:flat deepseek_key → providers.deepseek.api_key
+  if (raw.deepseek_key && !raw.providers) {
+    raw.providers = {
+      deepseek: { api_key: raw.deepseek_key, model: '', base_url: '' },
+    };
+    raw.provider = raw.provider || 'deepseek';
+    delete raw.deepseek_key;
+  }
+
+  return {
+    ...DEFAULT_API,
+    ...raw,
+    providers: { ...DEFAULT_API.providers, ...(raw.providers || {}) },
+  };
 }
 async function setApiConfig(c) {
-  await chrome.storage.local.set({ apiConfig: { ...DEFAULT_API, ...c } });
+  const next = {
+    ...DEFAULT_API,
+    ...c,
+    providers: { ...DEFAULT_API.providers, ...(c.providers || {}) },
+  };
+  // 老字段抹掉
+  delete next.deepseek_key;
+  await chrome.storage.local.set({ apiConfig: next });
 }
 
 // ============================================================
@@ -1144,15 +1219,21 @@ function hitsHardReject(job, profile) {
 
 function buildScoringMessages(job, profile) {
   const premium = parseFloat(profile.beijing_salary_premium || 0.10);
+  const prios = profile.priorities || {};
+  const star = (k, def) => (typeof prios[k] === 'number' ? prios[k] : def);
+
   const sys =
-    '你是资深求职顾问,为候选人筛选岗位。严格输出 JSON,不要 markdown 代码块。' +
-    '字段: score(0-100 整数), priority(S/A/B/C/Reject 之一), reason(一句中文), ' +
-    'concerns(string 数组), resume_version(AI_SOLUTION/AI_CUSTOMER/IAM_AI/LLM_APP 之一或空字符串), ' +
-    'pitch(一句招呼语)。';
+    '你是资深求职顾问,综合用户偏好为候选人筛选岗位。严格输出 JSON,不要 markdown 代码块。' +
+    '字段: score(0-100 整数), priority(S/A/B/C/Reject 之一), reason(一句中文,说明给这分的核心原因), ' +
+    'concerns(string 数组,具体担忧如"加班风险高""通勤过远 1 小时+""薪资低于期望"), ' +
+    'resume_version(AI_SOLUTION/AI_CUSTOMER/IAM_AI/LLM_APP 之一或空字符串), ' +
+    'pitch(一句招呼语,用于投递时主动开口)。';
 
   const resumeSection = profile.resume_md
     ? `\n\n## 候选人完整简历(权威信息源,以下与 summary 冲突时以此为准)\n${profile.resume_md}\n`
     : '';
+
+  const homeLine = profile.home_district ? `候选人住址: ${profile.home_district}` : '候选人未填住址(通勤维度按默认权重处理)';
 
   const user = `## 候选人 summary
 ${(profile.summary || '').trim()}
@@ -1161,28 +1242,48 @@ ${resumeSection}
 S 级目标岗位:${JSON.stringify(profile.s_tier_roles || [])}
 A 级目标岗位:${JSON.stringify(profile.a_tier_roles || [])}
 
+## 候选人偏好(1-5 颗星,5 = 最看重,1 = 不在乎)
+- 岗位精准匹配 (role_fit): ${star('role_fit', 5)}/5
+- 薪资 (compensation): ${star('salary', 3)}/5
+- 大厂背景 (brand): ${star('brand', 3)}/5
+- 不加班 / work-life: ${star('no_overtime', 3)}/5
+- 公司稳定: ${star('stability', 3)}/5
+- 通勤距离: ${star('commute', 3)}/5
+- 技术栈契合: ${star('tech_fit', 3)}/5
+
+${homeLine}
+其他偏好(用户自由文本,可能含硬性规则): ${(profile.other_prefs || '').trim() || '(无)'}
+
 ## 岗位
 公司:${job.company}
 标题:${job.title}
 城市:${job.city}
 薪资:${job.salary}
-JD:
+JD/字段:
 ${job.jd}
 
 ## 评分规则
-0-100 分,权重:
-- role_fit 30%(命中 S 级 → 满档加分;A 级 → 加分;纯算法/外包/培训类 → 大扣分)
-- compensation_fit 25%(月薪低于 ${Math.round((profile.target_monthly_min || 30000) * 0.93 / 1000)}K 大扣分;${Math.round((profile.target_monthly_ideal || 40000) / 1000)}K+ 满分)
-- experience_fit 20%(1-3 年或 2-5 年加分;明确 5 年以上要求 → 扣分)
-- tech_stack_fit 15%(LLM/RAG/Agent/Azure/Entra ID/FastAPI 加分)
-- company_quality 10%(大厂/独角兽/外资加分;小公司无融资减分)
+0-100 分,**按用户星级动态加权各维度**(每个维度的影响力 ≈ 该维度星级 ÷ 5)。
 
-分档:S ≥ 90, A ≥ 70, B ≥ 55, C ≥ 40, Reject < 40。
+维度清单:
+- role_fit: 命中 S 级 → 大幅加分(可达满档);A 级 → 加分;纯算法/外包/培训类 → 大扣分
+- compensation_fit: 月薪低于 ${Math.round(profile.target_monthly_min * 0.93 / 1000)}K 大扣分;${Math.round(profile.target_monthly_ideal / 1000)}K+ 满分;不写薪资或写"待议"按中性处理
+- experience_fit: 1-3 年或 2-5 年加分;明确要求 5 年以上 → 扣分
+- tech_stack_fit: 命中候选人简历技术栈(LLM/RAG/Agent/Azure/Entra ID/FastAPI 等)加分
+- brand: 大厂(BAT/字节/华为/微软/Google 等)/独角兽/外资 → 加分;无名小公司减分。**星级 4-5 时**这维度权重显著提升
+- stability: 已上市 / D 轮及以上 / 不需要融资 → 加分;天使-A 轮 → 减分;星级 4-5 时维度权重提升
+- work_life_balance: 推断加班风险信号 — 大厂 + 互联网 + 包晚餐 + 加班补助 = **高加班风险**;周末双休 + 弹性工作 + 五险一金齐 + 不需要融资行业 = 低加班。**no_overtime 星级 ≥ 4 时,高加班岗位务必扣分 + 在 concerns 写"加班风险高"**
+- commute_fit: 用 home_district 和岗位 area 字段粗判通勤 — 同城同区 → 加分;同城不同区 → 中性;远郊到中心 → 扣分;明显跨区(浦东到长宁、海淀到通州)→ **commute 星级 ≥ 4 时扣分 + concerns 写"通勤超过 X 小时"**
 
-## 北京软提示规则(重要)
-若岗位城市是"北京",并且薪资相比上海/杭州同档同类岗位**高出比例不足 ${Math.round(premium * 100)}%**,
-在 concerns 里追加一条:"北京无户口,薪资溢价不足(${Math.round(premium * 100)}%)"。
-这只是软提示——**不要**因此把 priority 设为 Reject,也**不要**额外扣大分;仅在 concerns 里注明即可。
+## 北京软提示规则(老规则保留)
+若岗位城市是"北京",且薪资相比上海/杭州同档岗高出比例不足 ${Math.round(premium * 100)}%,
+concerns 里追加 "北京无户口,薪资溢价不足(${Math.round(premium * 100)}%)"。**不要**因此 Reject。
+
+## 硬性偏好规则
+"其他偏好"中若含硬性规则(如"不投朝阳区"、"35K 以下不投"、"讨厌外包"等),命中即将 priority 降一档或 Reject,并在 concerns 写明。
+
+## 分档
+S ≥ 90, A ≥ 70, B ≥ 55, C ≥ 40, Reject < 40。
 
 ## 输出
 仅输出严格 JSON 对象,不要任何解释、不要 markdown 包裹。`;
@@ -1216,28 +1317,83 @@ function parseScoreReply(raw) {
   }
 }
 
-async function callDeepseek(messages, apiKey, retries = 2) {
+// ─────────────────────── LLM 调度器(7 个 provider) ───────────────────────
+async function callLLM(messages, providerKey, providerConfig, retries = 2) {
+  const meta = PROVIDERS[providerKey];
+  if (!meta) throw new Error(`未知 provider: ${providerKey}`);
+  if (!providerConfig.api_key) {
+    throw new Error(`${meta.name} 未配置 API key`);
+  }
+  const baseUrl = (providerConfig.base_url || meta.base_url).replace(/\/$/, '');
+  const model = providerConfig.model || meta.default_model;
+
+  if (meta.protocol === 'openai') {
+    return await callOpenAICompat(baseUrl, model, messages, providerConfig.api_key, retries);
+  } else if (meta.protocol === 'anthropic') {
+    return await callAnthropic(baseUrl, model, messages, providerConfig.api_key, retries);
+  }
+  throw new Error(`未支持的 protocol: ${meta.protocol}`);
+}
+
+async function callOpenAICompat(baseUrl, model, messages, apiKey, retries) {
   let lastErr = null;
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
-      const resp = await fetch('https://api.deepseek.com/chat/completions', {
+      const resp = await fetch(baseUrl + '/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: 'deepseek-chat',
-          messages,
+          model, messages,
           response_format: { type: 'json_object' },
           temperature: 0.2,
         }),
       });
-      if (!resp.ok) {
-        throw new Error(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
-      }
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
       const data = await resp.json();
       return data?.choices?.[0]?.message?.content || null;
+    } catch (e) {
+      lastErr = e;
+      if (attempt < retries - 1) await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+  throw lastErr;
+}
+
+async function callAnthropic(baseUrl, model, messages, apiKey, retries) {
+  // Anthropic 把 system 和 messages 分开,不支持 response_format
+  let systemMsg = '';
+  const userMessages = [];
+  for (const m of messages) {
+    if (m.role === 'system') systemMsg += m.content + '\n';
+    else userMessages.push({ role: m.role, content: m.content });
+  }
+  systemMsg += '\n严格只输出一个 JSON 对象,不要 markdown 包裹,不要解释。';
+
+  let lastErr = null;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const resp = await fetch(baseUrl + '/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: 1024,
+          system: systemMsg,
+          messages: userMessages,
+        }),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      const data = await resp.json();
+      const text = (data.content || []).map((c) => c.text || '').join('');
+      return text || null;
     } catch (e) {
       lastErr = e;
       if (attempt < retries - 1) await new Promise((r) => setTimeout(r, 1000));
@@ -1268,7 +1424,11 @@ async function withConcurrency(tasks, limit) {
 async function scoreAllUnscored() {
   const profile = await getProfile();
   const api = await getApiConfig();
-  if (!api.deepseek_key) throw new Error('未配置 DeepSeek API key,先去「个人画像」标签填');
+  const activeProvider = api.provider || 'deepseek';
+  const providerConfig = (api.providers && api.providers[activeProvider]) || {};
+  if (!providerConfig.api_key) {
+    throw new Error(`未配置 ${PROVIDERS[activeProvider]?.name || activeProvider} 的 API key,先去画像 tab 填`);
+  }
 
   const jobsMap = await getJobsMap();
   const allKeys = Object.keys(jobsMap);
@@ -1290,7 +1450,7 @@ async function scoreAllUnscored() {
       item.score_concerns = [`hard_reject: ${hit}`];
       item.score_pitch = '';
     } else {
-      const raw = await callDeepseek(buildScoringMessages(job, profile), api.deepseek_key);
+      const raw = await callLLM(buildScoringMessages(job, profile), activeProvider, providerConfig);
       const r = parseScoreReply(raw);
       item.score = r.score;
       item.score_priority = r.priority;

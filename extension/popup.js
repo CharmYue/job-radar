@@ -58,7 +58,9 @@ async function refreshOnboardingBanner() {
   if (!p.summary) missing.push('summary');
   if (!p.resume_md) missing.push('简历');
   if (!p.s_tier_roles || p.s_tier_roles.length === 0) missing.push('S 级关键词');
-  if (!a.deepseek_key) missing.push('DeepSeek key');
+  const active = a.provider || 'deepseek';
+  const cfg = (a.providers && a.providers[active]) || {};
+  if (!cfg.api_key) missing.push('LLM API key');
   if (!a.wxpusher_token || !a.wxpusher_uid) missing.push('WxPusher');
 
   if (missing.length > 0) {
@@ -157,6 +159,51 @@ document.querySelectorAll('.tab').forEach((t) => {
 // ============================================================
 // 画像:完成度 checklist + load/save + yaml/resume 导入
 // ============================================================
+// 偏好维度 - 用于 star UI 渲染
+const PRIORITY_DIMS = [
+  { key: 'role_fit',    label: '岗位精准匹配',  hint: '命中 S/A 关键词' },
+  { key: 'salary',      label: '薪资',          hint: '高于目标月薪权重' },
+  { key: 'brand',       label: '大厂背景',      hint: 'BAT/字节/外资' },
+  { key: 'no_overtime', label: '不加班',        hint: 'work-life balance' },
+  { key: 'stability',   label: '公司稳定',      hint: '已上市/D 轮+' },
+  { key: 'commute',     label: '通勤距离',      hint: '配合住址使用' },
+  { key: 'tech_fit',    label: '技术栈契合',    hint: '匹配简历技术栈' },
+];
+
+let CURRENT_PROVIDERS_META = null; // { key: { name, default_model, base_url } }
+let CURRENT_PRIORITIES = {};
+
+function renderPriorityStars() {
+  const root = $('priorityStars');
+  if (!root) return;
+  root.innerHTML = '';
+  for (const dim of PRIORITY_DIMS) {
+    const cur = CURRENT_PRIORITIES[dim.key] || (dim.key === 'role_fit' ? 5 : 3);
+    const row = document.createElement('div');
+    row.className = 'prio-row';
+    const label = document.createElement('span');
+    label.className = 'label';
+    label.innerHTML = `${dim.label} <span class="hint">${dim.hint}</span>`;
+    row.appendChild(label);
+    const stars = document.createElement('span');
+    stars.className = 'prio-stars';
+    stars.dataset.key = dim.key;
+    for (let i = 1; i <= 5; i++) {
+      const s = document.createElement('span');
+      s.dataset.n = i;
+      s.textContent = '★';
+      if (i <= cur) s.classList.add('filled');
+      s.addEventListener('click', () => {
+        CURRENT_PRIORITIES[dim.key] = i;
+        renderPriorityStars();
+      });
+      stars.appendChild(s);
+    }
+    row.appendChild(stars);
+    root.appendChild(row);
+  }
+}
+
 async function loadProfileIntoUI() {
   const r = await chrome.runtime.sendMessage({ type: 'get_profile' });
   const p = (r && r.ok) ? r.profile : {};
@@ -167,17 +214,80 @@ async function loadProfileIntoUI() {
   $('pfSTier').value = (p.s_tier_roles || []).join('\n');
   $('pfATier').value = (p.a_tier_roles || []).join('\n');
   $('pfHardReject').value = (p.hard_reject || []).join('\n');
+  $('pfHomeDistrict').value = p.home_district || '';
+  $('pfOtherPrefs').value = p.other_prefs || '';
+  CURRENT_PRIORITIES = { ...(p.priorities || {}) };
+  renderPriorityStars();
+
+  // 加载 provider 元数据(只取一次)
+  if (!CURRENT_PROVIDERS_META) {
+    const pr = await chrome.runtime.sendMessage({ type: 'list_providers' });
+    if (pr && pr.ok) CURRENT_PROVIDERS_META = pr.providers;
+  }
 
   const ar = await chrome.runtime.sendMessage({ type: 'get_api' });
   const a = (ar && ar.ok) ? ar.api : {};
-  $('apiDeepseek').value = a.deepseek_key || '';
+  const active = a.provider || 'deepseek';
+  $('apiProvider').value = active;
+  const cfg = (a.providers && a.providers[active]) || {};
+  $('apiProviderKey').value = cfg.api_key || '';
+  $('apiProviderModel').value = cfg.model || '';
+  $('apiProviderBaseUrl').value = cfg.base_url || '';
   $('apiWxToken').value = a.wxpusher_token || '';
   $('apiWxUid').value = a.wxpusher_uid || '';
+  refreshProviderHint();
+  CURRENT_ACTIVE_PROVIDER = active;
 
   renderChecklist(p, a);
 }
 
+function refreshProviderHint() {
+  const meta = CURRENT_PROVIDERS_META && CURRENT_PROVIDERS_META[$('apiProvider').value];
+  if (!meta) return;
+  $('apiProviderModel').placeholder = meta.default_model;
+  $('apiProviderBaseUrl').placeholder = meta.base_url;
+  $('providerDefaultHint').textContent =
+    `默认 model: ${meta.default_model} · 默认 base url: ${meta.base_url}`;
+}
+
+// 切换 provider 时,先 save 当前的(避免丢) → 然后载入新 provider 的配置
+let CURRENT_ACTIVE_PROVIDER = null;
+async function onProviderSwitch() {
+  const next = $('apiProvider').value;
+  // 先保存当前 active 的 key/model 到 storage
+  if (CURRENT_ACTIVE_PROVIDER && CURRENT_ACTIVE_PROVIDER !== next) {
+    await saveActiveProviderFields(CURRENT_ACTIVE_PROVIDER);
+  }
+  CURRENT_ACTIVE_PROVIDER = next;
+  // 载入新 provider 的字段
+  const ar = await chrome.runtime.sendMessage({ type: 'get_api' });
+  const a = (ar && ar.ok) ? ar.api : {};
+  const cfg = (a.providers && a.providers[next]) || {};
+  $('apiProviderKey').value = cfg.api_key || '';
+  $('apiProviderModel').value = cfg.model || '';
+  $('apiProviderBaseUrl').value = cfg.base_url || '';
+  refreshProviderHint();
+}
+
+async function saveActiveProviderFields(providerKey) {
+  const ar = await chrome.runtime.sendMessage({ type: 'get_api' });
+  const a = (ar && ar.ok) ? ar.api : {};
+  const providers = { ...(a.providers || {}) };
+  providers[providerKey] = {
+    api_key: $('apiProviderKey').value.trim(),
+    model: $('apiProviderModel').value.trim(),
+    base_url: $('apiProviderBaseUrl').value.trim(),
+  };
+  await chrome.runtime.sendMessage({
+    type: 'save_api',
+    api: { ...a, provider: providerKey, providers },
+  });
+}
+
 function renderChecklist(p, a) {
+  const active = a.provider || 'deepseek';
+  const providerCfg = (a.providers && a.providers[active]) || {};
+  const providerName = (CURRENT_PROVIDERS_META && CURRENT_PROVIDERS_META[active]?.name) || active;
   const items = [
     { label: 'summary', ok: !!p.summary },
     { label: '完整简历', ok: !!p.resume_md && p.resume_md.length > 100 },
@@ -185,7 +295,7 @@ function renderChecklist(p, a) {
     { label: 'S 级关键词', ok: (p.s_tier_roles || []).length > 0 },
     { label: 'A 级关键词', ok: (p.a_tier_roles || []).length > 0 },
     { label: '硬拒关键词', ok: (p.hard_reject || []).length > 0 },
-    { label: 'DeepSeek API key', ok: !!a.deepseek_key },
+    { label: `${providerName} API key`, ok: !!providerCfg.api_key },
     { label: 'WxPusher Token', ok: !!a.wxpusher_token },
     { label: 'WxPusher UID', ok: !!a.wxpusher_uid },
   ];
@@ -213,20 +323,47 @@ function profileFromUI() {
     s_tier_roles: linesToArray($('pfSTier').value),
     a_tier_roles: linesToArray($('pfATier').value),
     hard_reject: linesToArray($('pfHardReject').value),
+    priorities: { ...CURRENT_PRIORITIES },
+    home_district: $('pfHomeDistrict').value.trim(),
+    other_prefs: $('pfOtherPrefs').value.trim(),
   };
 }
+
+async function saveProfileFromUI() {
+  // Profile
+  await chrome.runtime.sendMessage({ type: 'save_profile', profile: profileFromUI() });
+
+  // API: 保存当前 provider 的字段 + wxpusher
+  const active = $('apiProvider').value;
+  const ar = await chrome.runtime.sendMessage({ type: 'get_api' });
+  const a = (ar && ar.ok) ? ar.api : {};
+  const providers = { ...(a.providers || {}) };
+  providers[active] = {
+    api_key: $('apiProviderKey').value.trim(),
+    model: $('apiProviderModel').value.trim(),
+    base_url: $('apiProviderBaseUrl').value.trim(),
+  };
+  await chrome.runtime.sendMessage({
+    type: 'save_api',
+    api: {
+      ...a,
+      provider: active,
+      providers,
+      wxpusher_token: $('apiWxToken').value.trim(),
+      wxpusher_uid: $('apiWxUid').value.trim(),
+    },
+  });
+  CURRENT_ACTIVE_PROVIDER = active;
+  appendLog('✓ 画像 + API + 偏好 已保存');
+  await refreshAll();
+}
+
+// API config from UI (just the API part, used by 测试推送)
 function apiFromUI() {
   return {
-    deepseek_key: $('apiDeepseek').value.trim(),
     wxpusher_token: $('apiWxToken').value.trim(),
     wxpusher_uid: $('apiWxUid').value.trim(),
   };
-}
-async function saveProfileFromUI() {
-  await chrome.runtime.sendMessage({ type: 'save_profile', profile: profileFromUI() });
-  await chrome.runtime.sendMessage({ type: 'save_api', api: apiFromUI() });
-  appendLog('✓ 画像 + API key 已保存');
-  await refreshAll();
 }
 
 // ─────────────────────── YAML 导入 ───────────────────────
@@ -337,6 +474,8 @@ $('resumeFile').addEventListener('change', async (e) => {
   appendLog(`✓ 已从 ${f.name} 导入简历,记得点保存`);
   e.target.value = '';
 });
+
+$('apiProvider').addEventListener('change', onProviderSwitch);
 
 $('saveProfile').addEventListener('click', saveProfileFromUI);
 $('testPush').addEventListener('click', async () => {

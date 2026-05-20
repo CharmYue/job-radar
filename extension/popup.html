@@ -468,6 +468,29 @@
 
   /* ─────────── Hints / Misc ─────────── */
   .muted { color: #9ca3af; font-size: 11px; }
+
+  /* ─────────── Priority stars ─────────── */
+  .prio-row {
+    display: flex;
+    align-items: center;
+    padding: 3px 0;
+    gap: 8px;
+    font-size: 12px;
+  }
+  .prio-row .label { flex: 1; color: #4b5563; }
+  .prio-row .hint { color: #9ca3af; font-size: 10px; }
+  .prio-stars {
+    display: inline-flex;
+    gap: 2px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .prio-stars span {
+    color: #d1d5db;
+    font-size: 16px;
+    line-height: 1;
+  }
+  .prio-stars span.filled { color: #f0a040; }
   .section-title {
     font-size: 12px;
     color: #1d3557;
@@ -544,17 +567,57 @@
   </div>
 
   <div class="card">
-    <div class="card-title">🔑 API key <span class="hint">只存浏览器本地,不上网</span></div>
-    <label>DeepSeek API key</label>
-    <input type="password" id="apiDeepseek" placeholder="sk-...">
+    <div class="card-title">🎚️ 偏好权重 <span class="hint">1-5 颗星,5 = 最看重</span></div>
+    <div id="priorityStars"></div>
 
+    <label style="margin-top:10px;display:block">🏠 候选人住址(用于通勤评估,如: 上海·浦东·张江)</label>
+    <input type="text" id="pfHomeDistrict" placeholder="上海·浦东·张江">
+
+    <label style="margin-top:8px;display:block">📝 其他偏好(自由文本,可写硬性规则)</label>
+    <textarea id="pfOtherPrefs" rows="3" placeholder="如:不投朝阳区;月薪 35K 以下不投;讨厌外包公司"></textarea>
+  </div>
+
+  <div class="card">
+    <div class="card-title">🤖 LLM 模型 <span class="hint">7 个 provider 任选,key 独立存</span></div>
+    <label>当前使用</label>
+    <select id="apiProvider">
+      <option value="deepseek">DeepSeek</option>
+      <option value="qwen">通义千问</option>
+      <option value="doubao">豆包 (火山方舟)</option>
+      <option value="minimax">MiniMax</option>
+      <option value="zhipu">智谱 GLM</option>
+      <option value="openai">OpenAI GPT</option>
+      <option value="anthropic">Claude</option>
+    </select>
+
+    <div class="row" style="margin-top:6px">
+      <div>
+        <label>API key <span class="hint" id="providerHint"></span></label>
+        <input type="password" id="apiProviderKey" placeholder="sk-...">
+      </div>
+    </div>
     <div class="row">
       <div>
-        <label>WxPusher App Token</label>
+        <label>Model 名(留空 = 用默认)</label>
+        <input type="text" id="apiProviderModel">
+      </div>
+      <div>
+        <label>自定义 base URL(高级,通常不填)</label>
+        <input type="text" id="apiProviderBaseUrl">
+      </div>
+    </div>
+    <div class="muted" id="providerDefaultHint" style="margin-top:4px"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">📨 WxPusher</div>
+    <div class="row">
+      <div>
+        <label>App Token</label>
         <input type="password" id="apiWxToken" placeholder="AT_...">
       </div>
       <div>
-        <label>WxPusher UID</label>
+        <label>UID</label>
         <input type="password" id="apiWxUid" placeholder="UID_...">
       </div>
     </div>

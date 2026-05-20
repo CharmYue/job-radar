@@ -38,8 +38,11 @@ Chrome MV3 扩展,三段式架构 + AI 打分 + WxPusher 推送一体化:
 | **S 级目标岗位** | 每行一个,LLM 命中即满档加分 |
 | **A 级目标岗位** | 相关但非首选,LLM 加分 |
 | **硬拒关键词** | 每行一个,命中即本地直接 Reject,**不调 API** |
-| **DeepSeek API key** | sk- 开头,deepseek.com 注册拿 |
+| **LLM provider + API key** | 7 选 1:DeepSeek / 通义千问 / 豆包 / MiniMax / 智谱 / OpenAI / Claude — 各家 key 独立存,切换不丢 |
 | **WxPusher App Token + UID** | wxpusher.zjiecode.com 注册拿,免费 |
+| **🎚️ 偏好权重** | 7 个维度 1-5 颗星(role_fit / salary / brand / no_overtime / stability / commute / tech_fit),决定打分时各维度权重 |
+| **🏠 住址** | 用于通勤评估(如 `上海·浦东·张江`)— 配合 commute 星级 |
+| **📝 其他偏好** | 自由文本,可写硬性规则:"不投朝阳区" / "讨厌外包" / "35K 以下不投" 等,LLM 会命中即降档 |
 
 完成度 checklist 实时显示 9/9 时可以点 **📨 测试推送** 验证 WxPusher。
 

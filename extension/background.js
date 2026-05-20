@@ -244,6 +244,48 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           await chrome.storage.local.remove('taskQueue');
           sendResponse({ ok: true });
           break;
+        case 'get_profile':
+          sendResponse({ ok: true, profile: await getProfile() });
+          break;
+        case 'save_profile':
+          await setProfile(msg.profile || {});
+          sendResponse({ ok: true });
+          break;
+        case 'get_api':
+          sendResponse({ ok: true, api: await getApiConfig() });
+          break;
+        case 'save_api':
+          await setApiConfig(msg.api || {});
+          sendResponse({ ok: true });
+          break;
+        case 'score_all':
+          try {
+            const r = await scoreAllUnscored();
+            sendResponse({ ok: true, ...r });
+          } catch (e) {
+            sendResponse({ ok: false, error: e.message });
+          }
+          break;
+        case 'push_now':
+          try {
+            const r = await pushNow();
+            sendResponse({ ok: true, ...r });
+          } catch (e) {
+            sendResponse({ ok: false, error: e.message });
+          }
+          break;
+        case 'list_jobs': {
+          const jobsMap = await getJobsMap();
+          const items = Object.values(jobsMap);
+          // 按 score 倒序 + 未打分排最后
+          items.sort((a, b) => {
+            const sa = a.score_priority ? (a.score || 0) : -1;
+            const sb = b.score_priority ? (b.score || 0) : -1;
+            return sb - sa;
+          });
+          sendResponse({ ok: true, items });
+          break;
+        }
         default:
           sendResponse({ ok: false, error: 'unknown' });
       }
@@ -270,11 +312,23 @@ async function handleIntercepted(payload) {
   const list = (payload.zpData && payload.zpData.jobList) || [];
   if (list.length === 0) return;
 
+  // 公司过滤(逗号或空格分隔,子串匹配,大小写不敏感)
+  const companyFilter = (state.config && state.config.companyFilter || '').trim();
+  const companyTokens = companyFilter
+    ? companyFilter.split(/[,\s]+/).filter(Boolean).map((s) => s.toLowerCase())
+    : [];
+
   const jobs = await getJobsMap();
   let added = 0;
+  let filtered = 0;
   for (const raw of list) {
     const item = normalize(raw, pendingContext);
     if (!item.job_id || jobs[item.job_id]) continue;
+    if (companyTokens.length > 0) {
+      const brand = (item.company_name || '').toLowerCase();
+      const matched = companyTokens.some((t) => brand.indexOf(t) !== -1);
+      if (!matched) { filtered++; continue; }
+    }
     jobs[item.job_id] = item;
     added++;
     if (state.config && state.config.maxTotal > 0 &&
@@ -285,7 +339,8 @@ async function handleIntercepted(payload) {
   await setJobsMap(jobs);
   state.added += added;
 
-  log(`  ✓ ${progressLine()} 捕获 ${list.length} 条,新增 ${added} (累计 ${state.added})`);
+  const flt = filtered > 0 ? ` 公司过滤 -${filtered}` : '';
+  log(`  ✓ ${progressLine()} 捕获 ${list.length} 条,新增 ${added}${flt} (累计 ${state.added})`);
 
   if (state.config.maxTotal > 0 && state.added >= state.config.maxTotal) {
     state.reachedMaxTotal = true;
@@ -297,16 +352,20 @@ async function handleIntercepted(payload) {
 // 主流程
 // ============================================================
 function buildSearchUrl(task, sortMode) {
-  // task = { positionCode, positionName, cityCode, cityName, experience?, degree? }
+  // task = { positionCode?, query?, positionName, cityCode, cityName,
+  //         experience?, degree?, salary?, scale?, stage?, dateType? }
+  // positionCode 和 query 二选一(关键词搜索 vs 职位类目搜索)。
   const sort = SORT_MAP[sortMode] || '';
   const p = new URLSearchParams();
   p.set('city', task.cityCode);
-  p.set('position', task.positionCode);
-  if (task.experience) p.set('experience', task.experience);
-  if (task.degree)     p.set('degree', task.degree);
-  if (task.salary)     p.set('salary', task.salary);
-  if (task.scale)      p.set('scale', task.scale);
-  if (task.stage)      p.set('stage', task.stage);
+  if (task.positionCode) p.set('position', task.positionCode);
+  if (task.query)        p.set('query', task.query);
+  if (task.experience)   p.set('experience', task.experience);
+  if (task.degree)       p.set('degree', task.degree);
+  if (task.salary)       p.set('salary', task.salary);
+  if (task.scale)        p.set('scale', task.scale);
+  if (task.stage)        p.set('stage', task.stage);
+  if (task.dateType)     p.set('dateType', task.dateType);
   let url = `https://www.zhipin.com/web/geek/job?${p.toString()}`;
   if (sort) url += sort;
   return url;
@@ -835,4 +894,341 @@ async function exportJobRadarJson() {
   });
 
   return { count: records.length, filename };
+}
+
+// ============================================================
+// 个人画像 + API key 持久化
+// ============================================================
+const DEFAULT_PROFILE = {
+  summary: '',
+  resume_md: '',
+  target_monthly_min: 30000,
+  target_monthly_ideal: 40000,
+  s_tier_roles: [],
+  a_tier_roles: [],
+  hard_reject: [],
+  cities: ['上海', '杭州', '北京'],
+  beijing_salary_premium: 0.10,
+};
+const DEFAULT_API = {
+  deepseek_key: '',
+  wxpusher_token: '',
+  wxpusher_uid: '',
+};
+
+async function getProfile() {
+  const r = await chrome.storage.local.get('profile');
+  return { ...DEFAULT_PROFILE, ...(r.profile || {}) };
+}
+async function setProfile(p) {
+  await chrome.storage.local.set({ profile: { ...DEFAULT_PROFILE, ...p } });
+}
+async function getApiConfig() {
+  const r = await chrome.storage.local.get('apiConfig');
+  return { ...DEFAULT_API, ...(r.apiConfig || {}) };
+}
+async function setApiConfig(c) {
+  await chrome.storage.local.set({ apiConfig: { ...DEFAULT_API, ...c } });
+}
+
+// ============================================================
+// AI 打分 — DeepSeek (port from src/job_radar/score.py)
+// ============================================================
+const VALID_PRIORITIES = new Set(['S', 'A', 'B', 'C', 'Reject']);
+
+function jobToScoreInput(item) {
+  // 把数据池里的 normalize() 输出拍扁成 score.py 期望的 Job
+  const parts = [];
+  if (item.experience) parts.push(`经验: ${item.experience}`);
+  if (item.education) parts.push(`学历: ${item.education}`);
+  if (item.area) parts.push(`区域: ${item.area}`);
+  if (item.industry || item.financing || item.company_size) {
+    const co = [item.industry, item.financing, item.company_size].filter(Boolean).join(' · ');
+    parts.push(`公司: ${co}`);
+  }
+  if (item.skills) parts.push(`技能: ${item.skills}`);
+  if (item.welfare) parts.push(`福利: ${item.welfare}`);
+  if (item.hr_name) {
+    const hr = [item.hr_name, item.hr_title, item.hr_active].filter(Boolean).join(' / ');
+    parts.push(`HR: ${hr}`);
+  }
+  if (item.position_name) parts.push(`Boss 类目: ${item.position_name}`);
+  return {
+    title: item.job_name || '',
+    company: item.company_name || '',
+    city: item.city || item.search_city || '',
+    salary: item.salary || '待议',
+    jd: parts.join(' | '),
+    url: item.job_url || '',
+  };
+}
+
+function hitsHardReject(job, profile) {
+  const blob = `${job.title} ${job.jd}`.toLowerCase();
+  for (const kw of profile.hard_reject || []) {
+    if (kw && blob.indexOf(kw.toLowerCase()) !== -1) return kw;
+  }
+  return null;
+}
+
+function buildScoringMessages(job, profile) {
+  const premium = parseFloat(profile.beijing_salary_premium || 0.10);
+  const sys =
+    '你是资深求职顾问,为候选人筛选岗位。严格输出 JSON,不要 markdown 代码块。' +
+    '字段: score(0-100 整数), priority(S/A/B/C/Reject 之一), reason(一句中文), ' +
+    'concerns(string 数组), resume_version(AI_SOLUTION/AI_CUSTOMER/IAM_AI/LLM_APP 之一或空字符串), ' +
+    'pitch(一句招呼语)。';
+
+  const resumeSection = profile.resume_md
+    ? `\n\n## 候选人完整简历(权威信息源,以下与 summary 冲突时以此为准)\n${profile.resume_md}\n`
+    : '';
+
+  const user = `## 候选人 summary
+${(profile.summary || '').trim()}
+${resumeSection}
+目标月薪:最低 ${profile.target_monthly_min},理想 ${profile.target_monthly_ideal}。
+S 级目标岗位:${JSON.stringify(profile.s_tier_roles || [])}
+A 级目标岗位:${JSON.stringify(profile.a_tier_roles || [])}
+
+## 岗位
+公司:${job.company}
+标题:${job.title}
+城市:${job.city}
+薪资:${job.salary}
+JD:
+${job.jd}
+
+## 评分规则
+0-100 分,权重:
+- role_fit 30%(命中 S 级 → 满档加分;A 级 → 加分;纯算法/外包/培训类 → 大扣分)
+- compensation_fit 25%(月薪低于 ${Math.round((profile.target_monthly_min || 30000) * 0.93 / 1000)}K 大扣分;${Math.round((profile.target_monthly_ideal || 40000) / 1000)}K+ 满分)
+- experience_fit 20%(1-3 年或 2-5 年加分;明确 5 年以上要求 → 扣分)
+- tech_stack_fit 15%(LLM/RAG/Agent/Azure/Entra ID/FastAPI 加分)
+- company_quality 10%(大厂/独角兽/外资加分;小公司无融资减分)
+
+分档:S ≥ 90, A ≥ 70, B ≥ 55, C ≥ 40, Reject < 40。
+
+## 北京软提示规则(重要)
+若岗位城市是"北京",并且薪资相比上海/杭州同档同类岗位**高出比例不足 ${Math.round(premium * 100)}%**,
+在 concerns 里追加一条:"北京无户口,薪资溢价不足(${Math.round(premium * 100)}%)"。
+这只是软提示——**不要**因此把 priority 设为 Reject,也**不要**额外扣大分;仅在 concerns 里注明即可。
+
+## 输出
+仅输出严格 JSON 对象,不要任何解释、不要 markdown 包裹。`;
+
+  return [
+    { role: 'system', content: sys },
+    { role: 'user', content: user },
+  ];
+}
+
+function parseScoreReply(raw) {
+  if (!raw) return { score: 0, priority: 'C', reason: 'LLM 返回为空', concerns: ['LLM 返回为空'] };
+  let text = raw.trim();
+  if (text.startsWith('```')) {
+    text = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
+  }
+  try {
+    const data = JSON.parse(text);
+    let priority = String(data.priority || 'C').trim();
+    if (!VALID_PRIORITIES.has(priority)) priority = 'C';
+    return {
+      score: parseInt(data.score) || 0,
+      priority,
+      reason: String(data.reason || '').trim() || '(无理由)',
+      concerns: Array.isArray(data.concerns) ? data.concerns.map(String).filter(Boolean) : [],
+      resume_version: String(data.resume_version || '').trim(),
+      pitch: String(data.pitch || '').trim(),
+    };
+  } catch (e) {
+    return { score: 0, priority: 'C', reason: 'LLM JSON 解析失败', concerns: ['LLM JSON 解析失败'] };
+  }
+}
+
+async function callDeepseek(messages, apiKey, retries = 2) {
+  let lastErr = null;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const resp = await fetch('https://api.deepseek.com/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: 'deepseek-chat',
+          messages,
+          response_format: { type: 'json_object' },
+          temperature: 0.2,
+        }),
+      });
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      }
+      const data = await resp.json();
+      return data?.choices?.[0]?.message?.content || null;
+    } catch (e) {
+      lastErr = e;
+      if (attempt < retries - 1) await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+  throw lastErr;
+}
+
+// Semaphore=3 并发限流
+async function withConcurrency(tasks, limit) {
+  const results = new Array(tasks.length);
+  let idx = 0;
+  async function worker() {
+    while (true) {
+      const i = idx++;
+      if (i >= tasks.length) return;
+      try {
+        results[i] = await tasks[i]();
+      } catch (e) {
+        results[i] = { __err: e };
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
+  return results;
+}
+
+async function scoreAllUnscored() {
+  const profile = await getProfile();
+  const api = await getApiConfig();
+  if (!api.deepseek_key) throw new Error('未配置 DeepSeek API key,先去「个人画像」标签填');
+
+  const jobsMap = await getJobsMap();
+  const allKeys = Object.keys(jobsMap);
+  const targetKeys = allKeys.filter((k) => !jobsMap[k].score_priority);
+  if (targetKeys.length === 0) return { scored: 0, skipped: allKeys.length };
+
+  let progress = 0;
+  log(`▶ 开始打分: ${targetKeys.length} 条未打分(共 ${allKeys.length})`);
+
+  const tasks = targetKeys.map((k) => async () => {
+    const item = jobsMap[k];
+    const job = jobToScoreInput(item);
+    // hard reject 本地判断,不调 API
+    const hit = hitsHardReject(job, profile);
+    if (hit) {
+      item.score = 0;
+      item.score_priority = 'Reject';
+      item.score_reason = `命中 hard_reject 关键词: ${hit}`;
+      item.score_concerns = [`hard_reject: ${hit}`];
+      item.score_pitch = '';
+    } else {
+      const raw = await callDeepseek(buildScoringMessages(job, profile), api.deepseek_key);
+      const r = parseScoreReply(raw);
+      item.score = r.score;
+      item.score_priority = r.priority;
+      item.score_reason = r.reason;
+      item.score_concerns = r.concerns;
+      item.score_pitch = r.pitch || '';
+      item.score_resume_version = r.resume_version || '';
+    }
+    progress++;
+    chrome.runtime.sendMessage({
+      type: 'score_progress',
+      done: progress,
+      total: targetKeys.length,
+    }).catch(() => {});
+    return true;
+  });
+
+  await withConcurrency(tasks, 3);
+  await setJobsMap(jobsMap);
+  log(`✓ 打分完成: 新增 ${targetKeys.length} 条`);
+  return { scored: targetKeys.length, skipped: allKeys.length - targetKeys.length };
+}
+
+// ============================================================
+// 推送 — WxPusher (port from src/job_radar/{report,push}.py)
+// ============================================================
+function buildCompactReport(scoredItems, dateStr) {
+  const byPrio = { S: [], A: [], B: [], C: [], Reject: [] };
+  for (const it of scoredItems) {
+    const p = it.score_priority || 'C';
+    (byPrio[p] || byPrio.C).push(it);
+  }
+  for (const k of Object.keys(byPrio)) {
+    byPrio[k].sort((a, b) => (b.score || 0) - (a.score || 0));
+  }
+  const total = scoredItems.length;
+  const counts = {
+    S: byPrio.S.length,
+    A: byPrio.A.length,
+    B: byPrio.B.length,
+    C: byPrio.C.length,
+    Reject: byPrio.Reject.length,
+  };
+
+  const lines = [
+    `## 🎯 Boss 求职雷达 ${dateStr}`,
+    `> 共 ${total} | S=${counts.S} | A=${counts.A} | B=${counts.B} | C=${counts.C} | R=${counts.Reject}`,
+    '',
+  ];
+
+  const emit = (prio, label) => {
+    const items = byPrio[prio] || [];
+    if (items.length === 0) return;
+    lines.push(`### ${label} (${items.length})`);
+    for (const it of items) {
+      lines.push(`[${it.score || 0}] ${it.job_name} — ${it.salary || '待议'} — ${it.city || it.search_city || ''}`);
+      if (it.job_url) lines.push(it.job_url);
+      lines.push('');
+    }
+  };
+  emit('S', '🌟 S');
+  emit('A', '🟢 A');
+  emit('B', '🟡 B');
+
+  return {
+    md: lines.join('\n').replace(/\s+$/, '') + '\n',
+    counts,
+  };
+}
+
+async function pushWxPusher(md, summary, apiToken, uid) {
+  const MAX_CONTENT = 10000;
+  const content = md.length <= MAX_CONTENT
+    ? md
+    : md.slice(0, MAX_CONTENT - 20) + '\n\n…(已截断)';
+  const resp = await fetch('https://wxpusher.zjiecode.com/api/send/message', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      appToken: apiToken,
+      content,
+      contentType: 3,  // markdown
+      summary: summary.slice(0, 100),
+      uids: [uid],
+    }),
+  });
+  if (!resp.ok) {
+    throw new Error(`WxPusher HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+  }
+  const data = await resp.json();
+  if (!data.success) {
+    throw new Error(`WxPusher 失败: ${JSON.stringify(data).slice(0, 200)}`);
+  }
+  return data;
+}
+
+async function pushNow() {
+  const api = await getApiConfig();
+  if (!api.wxpusher_token || !api.wxpusher_uid) {
+    throw new Error('未配置 WxPusher,先去「个人画像」标签填');
+  }
+  const jobsMap = await getJobsMap();
+  const items = Object.values(jobsMap).filter((j) => j.score_priority);
+  if (items.length === 0) throw new Error('没有已打分的岗位,请先点「全部打分」');
+
+  const today = new Date().toISOString().slice(0, 10);
+  const { md, counts } = buildCompactReport(items, today);
+  const summary = `Boss 雷达 ${today} | ${counts.S} S / ${counts.A} A`;
+  await pushWxPusher(md, summary, api.wxpusher_token, api.wxpusher_uid);
+  log(`✓ WxPusher 推送成功: ${summary}`);
+  return { total: items.length, counts };
 }

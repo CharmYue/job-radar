@@ -6,11 +6,15 @@
 
 ## 它做什么
 
-1. **早 6:30(launchd 定时)**:抓取配置好的 Greenhouse / Lever / SmartRecruiters / Workday 接口 + 一轮 Brave Search → 城市/角色预筛 → DeepSeek V4 拿你的 `data/resume.md` + `config/profile.yaml` 打分 → 推送精简报告到微信。
-2. **下午 17:00(launchd 定时)**:微信推送提醒你打开 Boss 采集扩展。
-3. **Boss 采集(手动 + Chrome 扩展)**:浏览器扩展猴补丁 `window.fetch`,**只观察 Boss 自家 JS 发的 `/joblist.json` 返回 JSON**,拿原始 22 字段(包括未混淆的 `salaryDesc`、公司规模、福利、HR 活跃度);跑完一键导出 `boss_<日期>.json`,喂给 `run_daily.py --import` 走和 ATS 一样的打分 / 推送链路。
+两条独立的 pipeline:
 
-每跑一次会在 SQLite 留一条 30 天去重记录,完整报告写到 `data/report_<日期>.md`。
+**ATS pipeline(早 6:30 自动 / Python + launchd)**
+抓取配置好的 Greenhouse / Lever / SmartRecruiters / Workday 接口 + 一轮 Brave Search → 城市/角色预筛 → DeepSeek V4 拿 `data/resume.md` + `config/profile.yaml` 打分 → WxPusher 推送精简报告到微信。
+
+**Boss pipeline(手动 / Chrome 扩展全程自治)**
+扩展猴补丁 `window.fetch`,**只观察 Boss 自家 JS 发的 `/joblist.json` 返回 JSON**(自己不发请求,风控难度直接降一档,而且能拿原始 22 字段:`salaryDesc`、公司规模、融资阶段、福利、技能、HR 活跃度...)。配置 → 采集 → DeepSeek 打分 → WxPusher 推送,**全在扩展里完成**,不用终端。可选导出 `boss_<日期>.json` 进 SQLite 归档。
+
+每次 ATS 跑会在 SQLite 留 30 天去重记录,完整报告写到 `data/report_<日期>.md`。
 
 ## 为什么不直接 Playwright + 模拟抓 API
 
@@ -76,17 +80,24 @@ launchctl load -w ~/Library/LaunchAgents/com.jobradar.bossreminder.plist
 
 跑完看 `data/daily_out.log` / `data/jobradar.log`。完整报告在 `data/report_<日期>.md`,SQLite 去重库是 `data/jobs.db`。
 
-## Boss 采集(手动)
+## Boss 采集(手动,扩展全程自治)
 
-详见 [docs/extension.md](docs/extension.md)。简化版流程:
+详见 [docs/extension.md](docs/extension.md)。简化流程:
 
-1. Chrome 里登录 zhipin.com
-2. 点工具栏的 **Boss 采集** 扩展图标
-3. 勾职位 + 城市,生成任务队列,点**开始**
-4. 跑完点 **导出 job-radar JSON** → 保存到 `~/job-radar/data/`
-5. 终端:`uv run python scripts/run_daily.py --import data/boss_<日期>.json`
+**首次配置(只做一次)** —— 点扩展图标 → **个人画像** tab:粘贴 summary + 完整简历 Markdown + 目标月薪 + S/A 级关键词 + 硬拒关键词 + DeepSeek key + WxPusher token/uid → **保存**
 
-整个流程 10-15 分钟(取决于多少关键词)。Boss 弹验证码或风控时扩展会自动停,2-4 小时后再试。
+**每日跑** —— **配置** tab:
+- 职位树勾选(售前/售后/客户成功)+ **关键词自由输入**(每行一个)
+- 城市勾选
+- 筛选:经验 / 学历 / **薪资区间** / **发布时间** / **公司过滤**
+- 点**生成任务队列** → 切到**运行** tab
+
+**运行** tab:
+1. **开始采集** —— 浏览器最小化窗口跑,数据池累计
+2. **AI 全部打分** —— DeepSeek 并发 3 跑,数据池每条岗位贴上 S/A/B/C/X 标签
+3. **一键推送 WxPusher** —— 自动拼 Markdown,只发 S+A+B 级,推到微信
+
+整个 Boss 流程 10-15 分钟,全程不用终端。Boss 弹验证码或风控时扩展自动停,2-4 小时后再试。
 
 ## 仓库结构
 

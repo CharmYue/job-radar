@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Boss直聘采集助手 v2 - 矩阵版",
-  "version": "2.0.0",
-  "description": "三级职位树 + 多城市 + 经验/学历筛选,批量遍历采集,自动断点续跑。",
+  "name": "Boss 求职雷达",
+  "version": "3.0.0",
+  "description": "Boss直聘批量采集 + DeepSeek AI 适配度打分 + WxPusher 微信推送一体化。",
   "permissions": [
     "storage",
     "downloads",
@@ -13,14 +13,16 @@
   ],
   "host_permissions": [
     "https://www.zhipin.com/*",
-    "https://*.zhipin.com/*"
+    "https://*.zhipin.com/*",
+    "https://api.deepseek.com/*",
+    "https://wxpusher.zjiecode.com/*"
   ],
   "background": {
     "service_worker": "background.js"
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Boss采集 v2"
+    "default_title": "Boss 求职雷达"
   },
   "content_scripts": [
     {

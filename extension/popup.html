@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>Boss采集 v2 矩阵版</title>
+<title>Boss 求职雷达</title>
 <style>
   * { box-sizing: border-box; }
   body {
@@ -33,17 +33,19 @@
     font-weight: normal;
   }
   label { font-size: 12px; color: #555; }
-  input[type=number], input[type=text], select {
+  input[type=number], input[type=text], input[type=password], textarea, select {
     width: 100%;
     padding: 5px 7px;
     border: 1px solid #ccc;
     border-radius: 4px;
     font-size: 12px;
     background: #fff;
+    font-family: inherit;
   }
-  .tabs { display: flex; border-bottom: 1px solid #ddd; margin-bottom: 10px; }
+  textarea { resize: vertical; min-height: 60px; }
+  .tabs { display: flex; border-bottom: 1px solid #ddd; margin-bottom: 10px; flex-wrap: wrap; }
   .tab {
-    padding: 6px 14px;
+    padding: 6px 10px;
     cursor: pointer;
     font-size: 12px;
     color: #666;
@@ -57,7 +59,7 @@
   .panel { display: none; }
   .panel.active { display: block; }
   .tree {
-    max-height: 240px;
+    max-height: 200px;
     overflow-y: auto;
     border: 1px solid #e0e0e0;
     border-radius: 4px;
@@ -112,7 +114,7 @@
     grid-template-columns: repeat(4, 1fr);
     gap: 2px;
     margin-top: 4px;
-    max-height: 110px;
+    max-height: 90px;
     overflow-y: auto;
     border: 1px solid #e0e0e0;
     border-radius: 4px;
@@ -214,33 +216,83 @@
   .qs-done { background: #2a9d4a; }
   .qs-failed { background: #c33; }
   .qs-failed_skipped { background: #663366; }
+  .section-title {
+    font-size: 12px;
+    color: #1d3557;
+    font-weight: 600;
+    margin: 12px 0 4px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #e0e0e0;
+  }
+  .section-title:first-child { margin-top: 4px; }
+  .scored-list {
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    background: #fff;
+    font-size: 11px;
+    margin-top: 6px;
+  }
+  .scored-row {
+    padding: 4px 6px;
+    border-bottom: 1px solid #f0f0f0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .scored-row:last-child { border-bottom: 0; }
+  .score-badge {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: #fff;
+    min-width: 32px;
+    text-align: center;
+  }
+  .sb-S { background: #c33; }
+  .sb-A { background: #2a9d4a; }
+  .sb-B { background: #f0a040; }
+  .sb-C { background: #888; }
+  .sb-Reject { background: #555; }
+  .sb-none { background: #ccc; color: #555; }
+  .scored-row .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .scored-row .salary { color: #666; font-size: 10px; }
 </style>
 </head>
 <body>
 
 <h3>
-  Boss 采集 v2 矩阵版
+  Boss 求职雷达
   <span class="badge" id="state">空闲</span>
 </h3>
-<div class="subtitle">三级职位树 · 多城市矩阵 · 断点续跑</div>
+<div class="subtitle">采集 + AI 打分 + 微信推送一体化</div>
 
 <div class="tabs">
   <div class="tab active" data-panel="config">配置</div>
-  <div class="tab" data-panel="queue">任务队列</div>
+  <div class="tab" data-panel="profile">个人画像</div>
+  <div class="tab" data-panel="queue">队列</div>
   <div class="tab" data-panel="run">运行</div>
 </div>
 
+<!-- ============================================================ 配置 -->
 <div class="panel active" id="panel-config">
 
-  <label>① 职位类型(三级,可按大类/二级一键全选)</label>
-  <input class="quick-filter" id="qfPos" placeholder="搜索职位名(如: Java / 数据 / 算法)">
+  <div class="section-title">① 搜索目标(职位树 ⊕ 关键词,二选一或都选)</div>
+  <input class="quick-filter" id="qfPos" placeholder="搜索职位名(如: 售前 / 客户成功 / 解决方案)">
   <div class="tree" id="positionTree">加载中...</div>
   <div style="font-size:11px;color:#888;margin:4px 0">
     已选职位: <b id="selPosCount" style="color:#c33">0</b> 个
     <button class="small gray" id="clearPos" style="float:right;margin-left:4px">清空职位</button>
   </div>
 
-  <label style="margin-top:8px;display:block">② 城市(多选)</label>
+  <label style="display:block;margin-top:6px">关键词自由输入(每行一个,比如 "AI 解决方案工程师" / "Solution Engineer")</label>
+  <textarea id="customQueries" rows="3" placeholder="AI 解决方案工程师
+Solution Engineer
+Customer Engineer"></textarea>
+
+  <div class="section-title">② 城市</div>
   <input class="quick-filter" id="qfCity" placeholder="搜索城市">
   <div class="city-grid" id="cityGrid"></div>
   <div style="font-size:11px;color:#888;margin-top:2px">
@@ -248,17 +300,41 @@
     <button class="small gray" id="clearCity" style="float:right">清空城市</button>
   </div>
 
+  <div class="section-title">③ 筛选(全部可选,留空 = 不限)</div>
   <div class="row">
     <div>
-      <label>③ 工作经验</label>
+      <label>工作经验</label>
       <select id="filterExp"><option value="">不限</option></select>
     </div>
     <div>
-      <label>④ 学历</label>
+      <label>学历</label>
       <select id="filterDeg"><option value="">不限</option></select>
     </div>
   </div>
 
+  <div class="row">
+    <div>
+      <label>薪资区间</label>
+      <select id="filterSalary"><option value="">不限</option></select>
+    </div>
+    <div>
+      <label>发布时间</label>
+      <select id="filterDate">
+        <option value="">不限</option>
+        <option value="1">今日</option>
+        <option value="2">3 日内</option>
+        <option value="3">一周内</option>
+        <option value="4">一月内</option>
+      </select>
+    </div>
+  </div>
+
+  <div style="margin-top:6px">
+    <label>公司过滤(留空 = 不限;多个用空格/逗号分隔,子串匹配)</label>
+    <input type="text" id="filterCompany" placeholder="如: 字节 阿里 SenseTime">
+  </div>
+
+  <div class="section-title">④ 运行参数</div>
   <div class="row">
     <div>
       <label>排序方式</label>
@@ -316,6 +392,72 @@
   </div>
 </div>
 
+<!-- ============================================================ 个人画像 -->
+<div class="panel" id="panel-profile">
+
+  <div class="section-title">候选人画像(用于 AI 适配度打分)</div>
+
+  <label>一句话 summary(技术栈 + 年限 + 方向)</label>
+  <textarea id="pfSummary" rows="2" placeholder="某大学 CS 硕士,3 年 AI 应用开发,Python/FastAPI/LangGraph,有 RAG/Agent 落地经验。"></textarea>
+
+  <label style="margin-top:6px;display:block">完整简历(Markdown,LLM 会全文读)</label>
+  <textarea id="pfResume" rows="6" placeholder="# 简历&#10;## 教育...&#10;## 工作经历..."></textarea>
+
+  <div class="row">
+    <div>
+      <label>最低月薪 (元)</label>
+      <input type="number" id="pfMonthlyMin" value="30000" min="0" step="1000">
+    </div>
+    <div>
+      <label>理想月薪 (元)</label>
+      <input type="number" id="pfMonthlyIdeal" value="40000" min="0" step="1000">
+    </div>
+  </div>
+
+  <label style="margin-top:6px;display:block">S 级目标岗位(每行一个 → LLM 命中即满档加分)</label>
+  <textarea id="pfSTier" rows="3" placeholder="AI Solution Engineer
+GenAI Solution Engineer
+AI 解决方案工程师"></textarea>
+
+  <label style="margin-top:6px;display:block">A 级目标岗位(每行一个 → 相关但非首选)</label>
+  <textarea id="pfATier" rows="3" placeholder="LLM Application Engineer
+AI 应用开发工程师
+Technical Customer Success"></textarea>
+
+  <label style="margin-top:6px;display:block">硬拒关键词(每行一个 → 命中直接 Reject,不调 API)</label>
+  <textarea id="pfHardReject" rows="3" placeholder="算法研究员
+大模型算法
+模型训练
+外包驻场
+培训讲师"></textarea>
+
+  <div class="section-title">API key(只存浏览器本地)</div>
+
+  <label>DeepSeek API key(sk-...)</label>
+  <input type="password" id="apiDeepseek" placeholder="sk-xxxxxxxx">
+
+  <div class="row">
+    <div>
+      <label>WxPusher App Token</label>
+      <input type="password" id="apiWxToken" placeholder="AT_xxxxxxxx">
+    </div>
+    <div>
+      <label>WxPusher UID</label>
+      <input type="password" id="apiWxUid" placeholder="UID_xxxxxxxx">
+    </div>
+  </div>
+
+  <div class="btns">
+    <button id="saveProfile" class="green">保存</button>
+    <button id="testPush" class="gray">测试推送</button>
+  </div>
+
+  <div class="hint">
+    所有数据存在 <code>chrome.storage.local</code>(本机,不会上网)。换电脑要重新填一次。
+  </div>
+</div>
+
+<!-- ============================================================ 队列 -->
 <div class="panel" id="panel-queue">
   <div class="stats">
     <span>总: <b id="qTotal">0</b></span>
@@ -330,24 +472,36 @@
   </div>
 </div>
 
+<!-- ============================================================ 运行 -->
 <div class="panel" id="panel-run">
   <div class="stats">
     <span>数据池: <b id="total">—</b></span>
     <span id="progress" style="color:#666"></span>
   </div>
+
   <div class="btns">
-    <button id="start" class="green">开始</button>
+    <button id="start" class="green">开始采集</button>
     <button id="resume" class="green">续跑</button>
     <button id="stop" class="red" disabled>停止</button>
   </div>
+
   <div class="btns">
-    <button id="exportJobRadar" class="green">导出 job-radar JSON</button>
+    <button id="scoreAll" class="green">AI 全部打分</button>
+    <button id="pushNow" class="green">一键推送 WxPusher</button>
+  </div>
+
+  <div class="btns">
+    <button id="exportJobRadar" class="gray">导出 job-radar JSON</button>
     <button id="export" class="gray">导出 CSV</button>
     <button id="clear" class="gray">清空数据池</button>
   </div>
+
+  <div id="scoreSummary" style="margin-top:8px;font-size:11px;color:#666"></div>
+  <div class="scored-list" id="scoredList"></div>
+
   <div id="log"></div>
   <div class="hint">
-    生成任务队列后点"开始"。中途停 → 下次点"续跑"从断点继续。建议保持本弹窗打开。
+    流程:① 配置 + 个人画像 → ② 生成队列 → ③ 开始采集 → ④ AI 全部打分 → ⑤ 一键推送
   </div>
 </div>
 

@@ -228,6 +228,13 @@ async function jobsCount() {
   return idbReq(db.transaction(STORE_JOBS, 'readonly').objectStore(STORE_JOBS).count());
 }
 
+async function jobsClear() {
+  const db = await openIdb();
+  const tx = db.transaction(STORE_JOBS, 'readwrite');
+  await idbReq(tx.objectStore(STORE_JOBS).clear());
+  await new Promise((r) => { tx.oncomplete = r; });
+}
+
 // 原子 read-modify-write — 防 race
 async function jobsUpdate(jobId, mutator) {
   const db = await openIdb();
@@ -253,17 +260,13 @@ async function getJobsMap() {
   for (const j of arr) map[j.job_id] = j;
   return map;
 }
+// ⚠ 不再做"删除 map 外的条目"语义 — codex round 3 指出这是 race 源头:
+// 读 → diff → 删 期间,其他单条原子 put 进来的会被误删。
+// 现在 setJobsMap 只做 merge(upsert),想删请用 jobsDelete / jobsClear。
 async function setJobsMap(m) {
-  // 注意:这是替换语义 — IDB 当前内容 + map 合并,不存在于 map 的会被删
-  // (老 chrome.storage 语义就是整体覆盖)
   const arr = Object.values(m || {});
+  if (arr.length === 0) return;
   await jobsBulkPut(arr);
-  // 删除 map 里没有的(回头如果发现性能问题,可以让 caller 显式调 jobsDelete)
-  const existing = await jobsListAll();
-  const keep = new Set(arr.map((j) => j.job_id));
-  for (const j of existing) {
-    if (!keep.has(j.job_id)) await jobsDelete(j.job_id);
-  }
 }
 
 // ============================================================
@@ -296,7 +299,9 @@ async function pruneOldJobs(opts = {}) {
   const tx = db.transaction(STORE_JOBS, 'readwrite');
   const store = tx.objectStore(STORE_JOBS);
   for (const item of all) {
-    if (item.user_marked === 'applied') continue;
+    // 兼容两种字段:老 `marked`(写者用)+ 新 `user_marked`(IDB index)
+    const m = item.marked || item.user_marked;
+    if (m === 'applied') continue;
     const ts = item.crawl_time_ts || Date.parse((item.crawl_time || '').replace(' ', 'T')) || 0;
     if (ts && ts < cutoff) {
       store.delete(item.job_id);
@@ -567,7 +572,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           }
           break;
         case 'clear':
-          await chrome.storage.local.remove('jobs');
+          await jobsClear();
+          await chrome.storage.local.remove('jobs');  // 顺手清掉旧迁移残留
           sendResponse({ ok: true });
           break;
         case 'get_queue': {
@@ -685,24 +691,33 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           break;
         }
         case 'mark_job': {
-          const jobsMap = await getJobsMap();
-          const item = jobsMap[msg.job_id];
-          if (!item) { sendResponse({ ok: false, error: '岗位不存在' }); break; }
-          if (msg.mark === null) {
-            delete item.marked;
-          } else {
-            item.marked = msg.mark;
-          }
-          if (msg.block_company && item.company_id) {
-            const blk = await getBlocked();
-            blk[item.company_id] = { company_name: item.company_name, ts: Date.now() };
-            await chrome.storage.local.set({ blockedCompanies: blk });
-            // 顺手把数据池里这家公司其他岗位也标 not_interested
-            for (const k of Object.keys(jobsMap)) {
-              if (jobsMap[k].company_id === item.company_id) jobsMap[k].marked = 'not_interested';
+          // 单条原子更新,不走 setJobsMap 全图替换(避免 race)
+          await jobsUpdate(msg.job_id, (cur) => {
+            if (msg.mark === null) {
+              delete cur.marked; cur.user_marked = '';
+            } else {
+              cur.marked = msg.mark; cur.user_marked = msg.mark;
+            }
+            return cur;
+          });
+          if (msg.block_company) {
+            const target = await jobsGet(msg.job_id);
+            if (target && target.company_id) {
+              const blk = await getBlocked();
+              blk[target.company_id] = { company_name: target.company_name, ts: Date.now() };
+              await chrome.storage.local.set({ blockedCompanies: blk });
+              // 这家公司其他岗位也标 not_interested — 用 IDB 全扫,但单条原子写
+              const all = await jobsListAll();
+              for (const j of all) {
+                if (j.company_id === target.company_id && j.marked !== 'not_interested') {
+                  await jobsUpdate(j.job_id, (c) => {
+                    c.marked = 'not_interested'; c.user_marked = 'not_interested';
+                    return c;
+                  });
+                }
+              }
             }
           }
-          await setJobsMap(jobsMap);
           sendResponse({ ok: true });
           break;
         }
@@ -716,14 +731,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           const blk = await getBlocked();
           delete blk[msg.company_id];
           await chrome.storage.local.set({ blockedCompanies: blk });
-          // 同时把数据池里该公司的 not_interested 标记清掉
-          const jobsMap = await getJobsMap();
-          for (const k of Object.keys(jobsMap)) {
-            if (jobsMap[k].company_id === msg.company_id && jobsMap[k].marked === 'not_interested') {
-              delete jobsMap[k].marked;
+          // 单条原子清掉这家公司岗位的 not_interested 标记
+          const all = await jobsListAll();
+          for (const j of all) {
+            if (j.company_id === msg.company_id && (j.marked === 'not_interested' || j.user_marked === 'not_interested')) {
+              await jobsUpdate(j.job_id, (c) => {
+                delete c.marked; c.user_marked = '';
+                return c;
+              });
             }
           }
-          await setJobsMap(jobsMap);
           sendResponse({ ok: true });
           break;
         }
@@ -782,16 +799,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: true });
           break;
         case 'clear_scores': {
-          const jobsMap = await getJobsMap();
-          for (const k of Object.keys(jobsMap)) {
-            delete jobsMap[k].score;
-            delete jobsMap[k].score_priority;
-            delete jobsMap[k].score_reason;
-            delete jobsMap[k].score_concerns;
-            delete jobsMap[k].score_pitch;
-            delete jobsMap[k].score_resume_version;
+          // 单条原子更新,避免全图替换 race
+          const all = await jobsListAll();
+          for (const j of all) {
+            await jobsUpdate(j.job_id, (c) => {
+              delete c.score; delete c.score_priority; delete c.score_reason;
+              delete c.score_concerns; delete c.score_pitch; delete c.score_resume_version;
+              delete c.score_fingerprint; delete c.score_at;
+              c.score_priority = '';  // 索引字段不能 undefined
+              return c;
+            });
           }
-          await setJobsMap(jobsMap);
           sendResponse({ ok: true });
           break;
         }
@@ -2067,7 +2085,8 @@ async function scoreAllUnscored() {
   const targetKeys = [];
   for (const k of allKeys) {
     const item = jobsMap[k];
-    if (item.user_marked === 'not_interested' || item.user_marked === 'applied') continue;
+    const m = item.marked || item.user_marked;
+    if (m === 'not_interested' || m === 'applied') continue;
     const fp = makeScoreFingerprint(profile, activeProvider, providerConfig.model, item);
     if (!item.score_priority) {
       targetKeys.push(k);
@@ -2293,13 +2312,14 @@ async function setPipelineRun(run) {
 async function clearPipelineRun() {
   await chrome.storage.local.remove('pipelineRun');
 }
-// Chrome MV3 production 强制 alarm 最小 30s (delay <30s 会被悄悄拉到 30s)。
-// 为了支持 10-25s 的 task-间冷却,用双轨:
+// Chrome MV3 production 强制 alarm 最小 30s。
+// 为了支持 10-25s 的 task-间冷却,用双轨 + 重入 lock:
 //   - setTimeout fast-path:SW 活着就靠它推进
 //   - 30s+buffer alarm backstop:SW 死了靠它兜底唤醒
-// _advanceTimer 单实例,避免重复 schedule。
+//   - _stepInProgress:防止 timer 触发后 step 跑得慢 + backstop 同时触发导致重入
 let _advanceTimer = null;
 let _advanceFireAt = 0;
+let _stepInProgress = false;
 async function scheduleAdvance(delayMs) {
   const d = Math.max(50, delayMs);
   const fireAt = Date.now() + d;
@@ -2312,16 +2332,17 @@ async function scheduleAdvance(delayMs) {
   if (d < 28 * 1000) {
     _advanceTimer = setTimeout(async () => {
       _advanceTimer = null;
-      // 兜底 alarm 可能也已经/即将触发,我们靠 _advanceFireAt 去重
       if (Date.now() >= _advanceFireAt - 200) {
         _advanceFireAt = 0;
+        // 关键:timer 触发时立刻把 backstop alarm 清掉,
+        // 不让它在 stepCrawl 跑得慢(>30s)时也触发一次,造成重入
+        try { await chrome.alarms.clear(ALARM_ADVANCE); } catch (e) {}
         try { await advancePipelineRun(); } catch (e) { console.warn('[advance st]', e); }
       }
     }, d);
-    // 兜底 alarm: 取 max(30s, d + 5s) 确保 SW 即使死了,30+s 后也能被唤醒
+    // 兜底 alarm: max(30s, d + 5s) 保证 SW 即使死了,30+s 后能被唤醒
     chrome.alarms.create(ALARM_ADVANCE, { when: Math.max(Date.now() + 30 * 1000, fireAt + 5 * 1000) });
   } else {
-    // 长延迟 → 直接 alarm
     chrome.alarms.create(ALARM_ADVANCE, { when: fireAt });
   }
 }
@@ -2391,11 +2412,24 @@ async function stopPipelineRun() {
 }
 
 async function advancePipelineRun() {
-  // 等 boot 完成,避免 leftover alarm 在 reconcile 跑完前抢先推进
+  // 等 boot 完成
   if (_bootRecovering) {
     try { await _bootDonePromise; } catch (e) {}
   }
+  // 重入保护:timer + backstop alarm 可能同时进来,只让一个跑
+  if (_stepInProgress) {
+    console.log('[advance] skip — step in progress');
+    return;
+  }
+  _stepInProgress = true;
+  try {
+    await _advancePipelineRunInner();
+  } finally {
+    _stepInProgress = false;
+  }
+}
 
+async function _advancePipelineRunInner() {
   const run = await getPipelineRun();
   if (!run) return;
   if (TERMINAL_STAGES.has(run.stage)) return;
@@ -2477,7 +2511,8 @@ async function stepCrawl(run) {
   if (!state.running) {
     state.running = true;
     state.shouldStop = false;
-    state.added = 0;
+    // SW 重启时从 pipelineRun 恢复 added 计数 — 不要丢之前已抓的
+    state.added = (run.crawl && typeof run.crawl.jobsAdded === 'number') ? run.crawl.jobsAdded : 0;
     state.currentKeywordTotal = q.tasks.length;
   }
   state.currentKeywordIdx = nextIdx + 1;
@@ -2505,6 +2540,8 @@ async function stepCrawl(run) {
 
   t.captured = state.added - beforeAdded;
   pipelineState.crawl.jobsAdded = state.added;
+  // 同步到持久 run — SW 死了恢复时不会归零
+  run.crawl = { ...(run.crawl || {}), jobsAdded: state.added, tasksDone: nextIdx + 1, tasksTotal: q.tasks.length };
 
   let cooldown = rand((run.config.gapMin || 10) * 1000, (run.config.gapMax || 25) * 1000);
   if (riskFlag) {

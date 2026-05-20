@@ -1247,7 +1247,6 @@ const DEFAULT_PROFILE = {
   target_monthly_min: 30000,
   target_monthly_max: 50000,
   target_annual: 500000,
-  cities: ['上海', '杭州', '北京'],
   beijing_salary_premium: 0.10,
   // 偏好权重(1-5 颗星,5 = 最看重)
   // 注:role_fit 不在用户控制范围 — 系统默认按 LLM 判断的"对口度"满档加权
@@ -1382,6 +1381,8 @@ async function getProfile() {
   if (raw.priorities && 'role_fit' in raw.priorities) {
     delete raw.priorities.role_fit;
   }
+  // 旧 cities 字段不再用(画像里的城市无用,实际由搜索 tab 决定)
+  if ('cities' in raw) delete raw.cities;
   // 旧 s_tier_roles / a_tier_roles 字段不再使用,但保留在 storage 不动(LLM prompt 不再读)
   return {
     ...DEFAULT_PROFILE,
@@ -1450,7 +1451,6 @@ function jobToScoreInput(item) {
     const hr = [item.hr_name, item.hr_title, item.hr_active].filter(Boolean).join(' / ');
     parts.push(`HR: ${hr}`);
   }
-  if (item.position_name) parts.push(`Boss 类目: ${item.position_name}`);
   // 拼上完整 JD(深度抓取的成果)
   let jdBody = parts.join(' | ');
   if (item.full_jd) {
@@ -1465,6 +1465,7 @@ function jobToScoreInput(item) {
     salary: item.salary || '待议',
     jd: jdBody,
     url: item.job_url || '',
+    search_intent: item.position_name || '',  // 用户搜索这个岗位时用的关键词
   };
 }
 
@@ -1509,6 +1510,7 @@ ${homeLine}
 标题:${job.title}
 城市:${job.city}
 薪资:${job.salary}
+${job.search_intent ? `用户搜索意图(本岗是用 "${job.search_intent}" 搜出来的): ${job.search_intent}` : ''}
 JD/字段:
 ${job.jd}
 
@@ -1536,6 +1538,10 @@ S/A 判定指南:
 
 ## 硬性偏好规则
 "其他偏好"含硬性规则(如"不投朝阳区"、"35K 以下不投"等),命中即降档或 Reject,在 concerns 写明。
+
+## 搜索意图偏离规则(若上方提供了"用户搜索意图")
+若岗位标题/JD 跟搜索意图明显无关(如搜"AI 解决方案"返回纯运营 / 销售 / 行政),降档并在 concerns 写"与搜索意图偏离"。
+**注意:** 不要把"搜索意图"当一票否决 — 若只是方向相邻(搜"AI 出海"返回"出海技术",或搜"解决方案"返回"售前架构师"),且简历技术栈仍高度契合,**保留原档**或仅微降。搜索关键词通常是粗略意图,简历 + 候选人需求 才是真实尺子。
 
 ## 分档
 S ≥ 90, A ≥ 70, B ≥ 55, C ≥ 40, Reject < 40。

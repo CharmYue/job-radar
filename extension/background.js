@@ -133,9 +133,77 @@ async function setJobsMap(m) {
   await chrome.storage.local.set({ jobs: m });
 }
 
+// #3 lite: 留存修剪 — 防止 jobs map 无限增长
+// 默认保留 30 天内的 + 标记 applied 的(用户在跟进的留住)
+const JOBS_KEEP_DAYS = 30;
+async function pruneOldJobs(opts = {}) {
+  const keepDays = opts.keepDays || JOBS_KEEP_DAYS;
+  const cutoff = Date.now() - keepDays * 24 * 3600 * 1000;
+  const jobs = await getJobsMap();
+  let pruned = 0;
+  for (const k of Object.keys(jobs)) {
+    const item = jobs[k];
+    if (item.user_marked === 'applied') continue;  // 投了的留着
+    const ts = Date.parse((item.crawl_time || '').replace(' ', 'T')) || 0;
+    if (ts && ts < cutoff) {
+      delete jobs[k];
+      pruned++;
+    }
+  }
+  if (pruned > 0) {
+    await setJobsMap(jobs);
+    log(`✓ 修剪 ${pruned} 条 ${keepDays}+ 天前的旧岗位`);
+  }
+  return { pruned, remaining: Object.keys(jobs).length };
+}
+
+// #1 lite: pipelineState 持久化 — SW 被 Chrome 杀掉后,
+// popup 重开能识别"上次跑到 X 阶段、超过 N 分钟无心跳 = SW 已死"
+async function persistPipelineState() {
+  try {
+    await chrome.storage.local.set({
+      pipelineRun: {
+        stage: pipelineState.stage,
+        startedAt: pipelineState.startedAt,
+        stageStartedAt: pipelineState.stageStartedAt,
+        substep: pipelineState.substep,
+        crawl: pipelineState.crawl,
+        score: pipelineState.score,
+        push: pipelineState.push,
+        error: pipelineState.error,
+        heartbeat: Date.now(),
+      }
+    });
+  } catch (e) {}
+}
+async function loadPersistedPipelineState() {
+  return (await chrome.storage.local.get('pipelineRun')).pipelineRun || null;
+}
+// SW 启动时:如果 storage 里有"活跃"状态 但很久没心跳 → 认定 SW 死过 → 复位
+async function reconcileStaleRunOnBoot() {
+  const persisted = await loadPersistedPipelineState();
+  if (!persisted) return;
+  const isActiveStage = ['crawling', 'scoring', 'pushing'].includes(persisted.stage);
+  if (!isActiveStage) return;
+  const sinceHeartbeat = Date.now() - (persisted.heartbeat || 0);
+  // 超过 3 分钟没心跳 + 当前内存里 stage 是 idle(我们刚启动)→ 上次跑被 SW 杀了
+  if (sinceHeartbeat > 3 * 60 * 1000) {
+    log(`⚠ 检测到上次跑被中断 (stage=${persisted.stage}, ${Math.round(sinceHeartbeat/60000)} 分钟前无心跳) — 标记为 error 状态`);
+    pipelineState.stage = 'error';
+    pipelineState.error = `SW 中断 (上次 stage: ${persisted.stage}, ${Math.round(sinceHeartbeat/60000)} 分钟前)`;
+    await persistPipelineState();
+    // 同时清理 crawl 内存状态(它本来就 reset 了,但保险)
+    if (state.running) state.running = false;
+  }
+}
+
 // SW 保活: 30 秒周期 + 每日定时检查
 chrome.alarms.create('keepalive', { periodInMinutes: 0.5 });
 chrome.alarms.create('daily-auto-pipeline', { periodInMinutes: 30 });
+
+// SW 启动时检查上次跑是否被中断 + 修剪老岗位
+reconcileStaleRunOnBoot().catch(() => {});
+pruneOldJobs().catch(() => {});
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'keepalive') return; // noop,只为保活
   if (alarm.name === 'daily-auto-pipeline') {
@@ -370,6 +438,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           await clearPersistedLog();
           sendResponse({ ok: true });
           break;
+        case 'prune_old_jobs': {
+          const r = await pruneOldJobs({ keepDays: msg.keepDays });
+          sendResponse({ ok: true, ...r });
+          break;
+        }
         case 'pipeline_status': {
           sendResponse({
             ok: true,
@@ -533,9 +606,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           break;
         }
         default:
-          sendResponse({ ok: false, error: 'unknown' });
+          sendResponse({ ok: false, error: `unknown message type: ${msg && msg.type}` });
       }
     } catch (e) {
+      // 之前是静默 — 错误被 popup 接到但 background 这边看不到,debug 困难
+      console.warn(`[boss-final] handler error for ${msg && msg.type}:`, e);
+      log(`✗ handler [${msg && msg.type}] 异常: ${e.message}`);
       sendResponse({ ok: false, error: e.message });
     }
   })();
@@ -1860,6 +1936,7 @@ async function scoreAllUnscored() {
       failed,
     }).catch(() => {});
     await persistMaybe();
+    persistPipelineState().catch(() => {});  // 心跳
     return true;
   });
 
@@ -2020,6 +2097,7 @@ async function runPipeline(config) {
     pipelineState.substep = msg || '';
     pipelineState.stageStartedAt = Date.now();
     chrome.runtime.sendMessage({ type: 'pipeline_progress', stage: msg || stage }).catch(() => {});
+    persistPipelineState().catch(() => {});
   };
 
   try {

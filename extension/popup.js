@@ -487,6 +487,40 @@ $('pfMonthlyMax').addEventListener('input', () => {
 });
 
 $('apiProvider').addEventListener('change', onProviderSwitch);
+
+$('testLLM').addEventListener('click', async () => {
+  // 先 flush 一次(确保当前 DOM 值进了 storage,然后 background 也能直接用 DOM 值)
+  flushAutoSave();
+  const providerKey = $('apiProvider').value;
+  const providerConfig = {
+    api_key: $('apiProviderKey').value.trim(),
+    model: effectiveModelValue(),
+    base_url: $('apiProviderBaseUrl').value.trim(),
+  };
+  if (!providerConfig.api_key) {
+    alert('请先填 API key');
+    return;
+  }
+  const btn = $('testLLM');
+  btn.disabled = true;
+  btn.textContent = '🧪 测试中...';
+  appendLog(`▶ 测试 ${providerKey} · ${providerConfig.model || '(默认 model)'}`);
+  const r = await chrome.runtime.sendMessage({
+    type: 'test_llm',
+    provider: providerKey,
+    providerConfig,
+  });
+  btn.disabled = false;
+  btn.textContent = '🧪 测试模型连通';
+  if (r.ok) {
+    appendLog(`✓ 连通 ${r.latency_ms}ms · 返回: ${r.sample.slice(0, 80)}`);
+    alert(`✓ 模型连通 (${r.latency_ms}ms)\n返回: ${r.sample.slice(0, 200)}`);
+  } else {
+    appendLog(`✗ 测试失败: ${r.error}`);
+    alert(`✗ 模型连不通\n\n${r.error}\n\n常见原因:\n- API key 错\n- model 名不对(切到下拉的默认 model 试试)\n- 需要 VPN(Claude/OpenAI)\n- 网络/代理`);
+  }
+});
+
 $('apiProviderModel').addEventListener('change', () => {
   const sel = $('apiProviderModel');
   const custom = $('apiProviderModelCustom');

@@ -429,6 +429,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           await chrome.storage.local.remove('history');
           sendResponse({ ok: true });
           break;
+        case 'test_llm': {
+          try {
+            const providerKey = msg.provider;
+            const providerConfig = msg.providerConfig || {};
+            const messages = [
+              { role: 'user', content: '请回复一个最简 JSON 对象: {"status":"ok"}' },
+            ];
+            const t0 = Date.now();
+            const raw = await callLLM(messages, providerKey, providerConfig);
+            const ms = Date.now() - t0;
+            if (!raw) {
+              sendResponse({ ok: false, error: 'LLM 返回为空' });
+            } else {
+              sendResponse({
+                ok: true,
+                latency_ms: ms,
+                sample: raw.slice(0, 200),
+              });
+            }
+          } catch (e) {
+            sendResponse({ ok: false, error: e.message });
+          }
+          break;
+        }
         case 'list_providers': {
           const out = {};
           for (const [k, v] of Object.entries(PROVIDERS)) {

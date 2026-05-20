@@ -26,10 +26,9 @@ Chrome MV3 扩展,三段式架构 + AI 打分 + WxPusher 推送一体化:
 
 | 字段 | 干啥 |
 |---|---|
-| **summary** | 一句话技术栈 + 年限,LLM 第一眼读 |
-| **完整简历** | Markdown 粘贴,LLM 全文读 — **S/A/B/C 等级由 LLM 根据简历自动判断**,不再手动配 |
+| **你的需求** | 自然语言描述求职意图,LLM 拿来理解你想要什么。比如:"帮我找适合的岗位,年包 45-55,大厂稳定的,沪杭京"。技术栈不用写这里,简历里有 |
+| **完整简历** | Markdown 粘贴,LLM 全文读 — 技术栈/年限/项目经验全部从这里读,**S/A/B/C 等级由 LLM 根据简历自动判断**,不再手动配关键词 |
 | **最低月薪 / 最高月薪 / 年包目标** | 3 个滑块,K = 千元;月薪范围用于 compensation_fit 权重;年包用于综合判断岗位 stock+bonus 是否够 |
-| **硬拒关键词** | 每行一个,命中即本地直接 Reject,**不调 API**(如 `算法研究员`、`外包驻场`) |
 | **LLM provider + API key** | 7 选 1:DeepSeek / 通义千问 / 豆包 / MiniMax / 智谱 / OpenAI / Claude — 各家 key 独立存,切换不丢 |
 | **WxPusher App Token + UID** | wxpusher.zjiecode.com 注册拿,免费 |
 | **🎚️ 偏好权重** | 6 个维度 1-5 颗星(salary / brand / no_overtime / stability / commute / tech_fit),决定各维度权重(role_fit 由系统默认满档) |

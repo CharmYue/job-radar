@@ -216,7 +216,6 @@ async function loadProfileIntoUI() {
   setSlider('pfMonthlyMin', Math.round((p.target_monthly_min || 30000) / 1000));
   setSlider('pfMonthlyMax', Math.round((p.target_monthly_max || p.target_monthly_ideal || 50000) / 1000));
   setSlider('pfAnnual', Math.round((p.target_annual || 500000) / 1000));
-  $('pfHardReject').value = (p.hard_reject || []).join('\n');
   $('pfHomeDistrict').value = p.home_district || '';
   $('pfOtherPrefs').value = p.other_prefs || '';
   CURRENT_PRIORITIES = { ...(p.priorities || {}) };
@@ -292,10 +291,9 @@ function renderChecklist(p, a) {
   const providerCfg = (a.providers && a.providers[active]) || {};
   const providerName = (CURRENT_PROVIDERS_META && CURRENT_PROVIDERS_META[active]?.name) || active;
   const items = [
-    { label: 'summary', ok: !!p.summary },
+    { label: '你的需求', ok: !!p.summary },
     { label: '完整简历', ok: !!p.resume_md && p.resume_md.length > 100 },
     { label: '薪资期望', ok: !!(p.target_monthly_min && p.target_monthly_max) },
-    { label: '硬拒关键词', ok: (p.hard_reject || []).length > 0 },
     { label: `${providerName} API key`, ok: !!providerCfg.api_key },
     { label: 'WxPusher Token', ok: !!a.wxpusher_token },
     { label: 'WxPusher UID', ok: !!a.wxpusher_uid },
@@ -315,14 +313,12 @@ function renderChecklist(p, a) {
 }
 
 function profileFromUI() {
-  const linesToArray = (t) => t.split('\n').map((s) => s.trim()).filter(Boolean);
   return {
     summary: $('pfSummary').value.trim(),
     resume_md: $('pfResume').value,
     target_monthly_min: (parseInt($('pfMonthlyMin').value) || 30) * 1000,
     target_monthly_max: (parseInt($('pfMonthlyMax').value) || 50) * 1000,
     target_annual: (parseInt($('pfAnnual').value) || 500) * 1000,
-    hard_reject: linesToArray($('pfHardReject').value),
     priorities: { ...CURRENT_PRIORITIES },
     home_district: $('pfHomeDistrict').value.trim(),
     other_prefs: $('pfOtherPrefs').value.trim(),

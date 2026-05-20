@@ -1084,7 +1084,6 @@ const DEFAULT_PROFILE = {
   target_monthly_min: 30000,
   target_monthly_max: 50000,
   target_annual: 500000,
-  hard_reject: [],
   cities: ['上海', '杭州', '北京'],
   beijing_salary_premium: 0.10,
   // 偏好权重(1-5 颗星,5 = 最看重)
@@ -1219,14 +1218,6 @@ function jobToScoreInput(item) {
   };
 }
 
-function hitsHardReject(job, profile) {
-  const blob = `${job.title} ${job.jd}`.toLowerCase();
-  for (const kw of profile.hard_reject || []) {
-    if (kw && blob.indexOf(kw.toLowerCase()) !== -1) return kw;
-  }
-  return null;
-}
-
 function buildScoringMessages(job, profile) {
   const premium = parseFloat(profile.beijing_salary_premium || 0.10);
   const prios = profile.priorities || {};
@@ -1240,13 +1231,13 @@ function buildScoringMessages(job, profile) {
     'pitch(一句招呼语,用于投递时主动开口)。';
 
   const resumeSection = profile.resume_md
-    ? `\n\n## 候选人完整简历(权威信息源,以下与 summary 冲突时以此为准)\n${profile.resume_md}\n`
+    ? `\n## 候选人完整简历(技术栈 / 年限 / 项目经验全部从这里读)\n${profile.resume_md}\n`
     : '';
 
   const homeLine = profile.home_district ? `候选人住址: ${profile.home_district}` : '候选人未填住址(通勤维度按默认权重处理)';
 
-  const user = `## 候选人 summary
-${(profile.summary || '').trim()}
+  const user = `## 候选人需求(用户自己说的话,综合体现意图和偏好)
+${(profile.summary || '').trim() || '(候选人未明确说,按简历 + 偏好权重判断)'}
 ${resumeSection}
 薪资期望:
 - 月薪 ${Math.round(profile.target_monthly_min / 1000)}K - ${Math.round(profile.target_monthly_max / 1000)}K
@@ -1272,13 +1263,13 @@ JD/字段:
 ${job.jd}
 
 ## 评分规则
-0-100 分。**你需要自己从简历推断哪类岗位对候选人是 S(完美对口)/ A(高度相关,可投)/ B(相关但有 stretch)/ C(勉强相关)/ Reject(基本不沾边或硬拒)**。
+0-100 分。**你需要自己从「候选人需求」和「完整简历」推断哪类岗位是 S(完美对口)/ A(高度相关,可投)/ B(相关但有 stretch)/ C(勉强相关)/ Reject(基本不沾边或与候选人需求冲突)**。
 
-判定逻辑:
-- 简历显示 AI 应用开发 + 解决方案/客户支持背景 → AI Solution Engineer / Customer Engineer / Solution Architect 类 = S 级
-- 简历技术栈匹配且方向相关 → LLM 应用 / Agent 开发 / RAG / TAM / 客户成功 = A 级
-- 相关但需要拉伸(纯前端 / 纯后端 / 纯产品)= B 级
-- 纯算法研究 / 模型训练 / 数据标注 / 外包驻场 / 培训讲师 → C 或 Reject(硬拒)
+S/A 判定指南:
+- 简历技术栈 + 项目经验和岗位 JD 高度契合,且符合"候选人需求"中表达的方向 → S 级
+- 技术栈相关、方向相关但有 1-2 个 mismatch(如年限差一档、技术栈差 1 项)→ A 级
+- 相关但需要明显 stretch(简历做 AI 但岗位要纯前端)→ B 级
+- 与简历方向完全不沾边、或与"候选人需求"明显冲突(候选人说"不投外包",这是外包岗) → Reject
 
 打分维度(按用户偏好星级动态加权):
 - role_fit (系统满档权重,基础维度):你判定的 S/A/B 等级直接驱动这维度
@@ -1455,24 +1446,14 @@ async function scoreAllUnscored() {
   const tasks = targetKeys.map((k) => async () => {
     const item = jobsMap[k];
     const job = jobToScoreInput(item);
-    // hard reject 本地判断,不调 API
-    const hit = hitsHardReject(job, profile);
-    if (hit) {
-      item.score = 0;
-      item.score_priority = 'Reject';
-      item.score_reason = `命中 hard_reject 关键词: ${hit}`;
-      item.score_concerns = [`hard_reject: ${hit}`];
-      item.score_pitch = '';
-    } else {
-      const raw = await callLLM(buildScoringMessages(job, profile), activeProvider, providerConfig);
-      const r = parseScoreReply(raw);
-      item.score = r.score;
-      item.score_priority = r.priority;
-      item.score_reason = r.reason;
-      item.score_concerns = r.concerns;
-      item.score_pitch = r.pitch || '';
-      item.score_resume_version = r.resume_version || '';
-    }
+    const raw = await callLLM(buildScoringMessages(job, profile), activeProvider, providerConfig);
+    const r = parseScoreReply(raw);
+    item.score = r.score;
+    item.score_priority = r.priority;
+    item.score_reason = r.reason;
+    item.score_concerns = r.concerns;
+    item.score_pitch = r.pitch || '';
+    item.score_resume_version = r.resume_version || '';
     progress++;
     chrome.runtime.sendMessage({
       type: 'score_progress',

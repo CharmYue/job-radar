@@ -557,11 +557,12 @@
   </div>
 
   <div class="card">
-    <div class="card-title">候选人画像 <span class="hint">S/A 等级由 AI 根据简历自动判断</span></div>
-    <label>一句话 summary(技术栈 + 年限 + 方向)</label>
-    <textarea id="pfSummary" rows="2"></textarea>
+    <div class="card-title">候选人画像 <span class="hint">技术栈从简历直接读,S/A 等级由 AI 自动判断</span></div>
 
-    <label style="margin-top:8px;display:block">完整简历(Markdown,LLM 全文读 → 决定哪些岗位是 S/A/B)</label>
+    <label>你的需求(自然语言,LLM 会综合你的偏好打分)</label>
+    <textarea id="pfSummary" rows="3" placeholder="如: 帮我找适合的岗位,年包 45-55,最好是大厂、稳定的,上海/杭州/北京"></textarea>
+
+    <label style="margin-top:8px;display:block">完整简历(Markdown,LLM 全文读 → 提取技术栈 + 判断 S/A/B 等级)</label>
     <textarea id="pfResume" rows="6"></textarea>
 
     <div class="slider-row">
@@ -576,9 +577,6 @@
       <label>年包目标 <span class="slider-val" id="pfAnnualVal">500K</span></label>
       <input type="range" id="pfAnnual" min="100" max="2000" step="50" value="500">
     </div>
-
-    <label style="margin-top:8px;display:block">硬拒关键词(命中直接 Reject,不调 API)</label>
-    <textarea id="pfHardReject" rows="3" placeholder="每行一个,如: 算法研究员 / 外包驻场 / 培训讲师"></textarea>
   </div>
 
   <div class="card">

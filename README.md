@@ -103,6 +103,25 @@ git clone https://github.com/CharmYue/job-radar.git
 
 ---
 
+## 🔄 升级到最新版
+
+之前 `git clone` 过的用户,3 步更新:
+
+```bash
+cd ~/job-radar          # 当年 clone 的目录
+git pull                # 拉最新代码
+```
+
+然后在 Chrome 里:
+
+3. `chrome://extensions/` → 找到「Boss 求职雷达」卡片 → 点卡片右下角**🔄 刷新图标**(或者直接关 Chrome 再开)
+
+确认版本:扩展卡片下方应该显示当前 `manifest.json` 里的版本号(比如 `6.2.3`)。你之前填的画像/AI key/搜索预设/数据池**都不会丢** — 数据全在 IndexedDB + chrome.storage,跟 git 代码独立。
+
+> 想看每次更新做了什么:`git log --oneline -20` 看最近 20 条 commit。
+
+---
+
 ## 📂 目录
 
 ```

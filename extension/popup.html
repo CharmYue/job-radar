@@ -845,7 +845,13 @@
   </details>
 
   <div class="card">
-    <div class="card-title">📊 数据池</div>
+    <div class="card-title">
+      📊 数据池
+      <span style="margin-left:auto;display:inline-flex;gap:4px">
+        <span class="fchip active" data-view="cards" id="viewCards" style="cursor:pointer">卡片</span>
+        <span class="fchip" data-view="table" id="viewTable" style="cursor:pointer">表格</span>
+      </span>
+    </div>
     <div class="filter-chips" id="resultFilters">
       <span class="fchip active" data-filter="all">全部</span>
       <span class="fchip" data-filter="S">S</span>
@@ -855,6 +861,22 @@
       <span class="fchip" data-filter="已投">已投</span>
     </div>
     <div class="scored-list" id="scoredList"></div>
+    <div class="scored-table-wrap" id="scoredTableWrap" style="display:none;max-height:480px;overflow:auto;border:1px solid #e5e7eb;border-radius:5px;background:#fff;font-size:11px">
+      <table id="scoredTable" style="width:100%;border-collapse:collapse">
+        <thead style="position:sticky;top:0;background:#f9fafb;z-index:1">
+          <tr style="text-align:left">
+            <th style="padding:5px 6px;border-bottom:1px solid #e5e7eb">分</th>
+            <th style="padding:5px 6px;border-bottom:1px solid #e5e7eb">岗位</th>
+            <th style="padding:5px 6px;border-bottom:1px solid #e5e7eb">公司</th>
+            <th style="padding:5px 6px;border-bottom:1px solid #e5e7eb">薪资</th>
+            <th style="padding:5px 6px;border-bottom:1px solid #e5e7eb">城市</th>
+            <th style="padding:5px 6px;border-bottom:1px solid #e5e7eb">理由</th>
+            <th style="padding:5px 6px;border-bottom:1px solid #e5e7eb;text-align:center;width:80px">操作</th>
+          </tr>
+        </thead>
+        <tbody id="scoredTableBody"></tbody>
+      </table>
+    </div>
     <div class="muted" id="scoreSummary" style="margin-top:4px"></div>
   </div>
 

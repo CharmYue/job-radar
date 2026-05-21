@@ -1823,12 +1823,18 @@ function jobToScoreInput(item) {
     const hr = [item.hr_name, item.hr_title, item.hr_active].filter(Boolean).join(' / ');
     parts.push(`HR: ${hr}`);
   }
-  // 拼上完整 JD(深度抓取的成果)
+  // 拼上完整 JD(深度抓取的成果),超长截断 — Boss JD 经常 5K+ 字符,
+  // 前 1800 + 后 600 字符通常足够 LLM 判断,显著降 token + 提速
+  const trim = (s, head, tail) => {
+    if (!s) return '';
+    if (s.length <= head + tail + 50) return s;
+    return s.slice(0, head) + '\n...[省略中段]...\n' + s.slice(-tail);
+  };
   let jdBody = parts.join(' | ');
   if (item.full_jd) {
-    jdBody += `\n\n=== 完整 JD ===\n${item.full_jd}`;
-    if (item.responsibility) jdBody += `\n\n岗位职责:\n${item.responsibility}`;
-    if (item.qualifications) jdBody += `\n\n任职要求:\n${item.qualifications}`;
+    jdBody += `\n\n=== 完整 JD ===\n${trim(item.full_jd, 1800, 600)}`;
+    if (item.responsibility) jdBody += `\n\n岗位职责:\n${trim(item.responsibility, 800, 200)}`;
+    if (item.qualifications) jdBody += `\n\n任职要求:\n${trim(item.qualifications, 800, 200)}`;
   }
   return {
     title: item.job_name || '',
@@ -2164,7 +2170,10 @@ async function scoreAllUnscored() {
     return true;
   });
 
-  await withConcurrency(tasks, 3);
+  // 并发数:DeepSeek/通义/豆包/MiniMax/智谱默认 RPM 都 ≥ 100,6 路并发安全。
+  // Claude/OpenAI 默认略紧,但单用户极少触发。出 429 走 callLLM 的重试。
+  const SCORING_CONCURRENCY = 6;
+  await withConcurrency(tasks, SCORING_CONCURRENCY);
   const msg = `✓ 打分完成: 成功 ${progress} / 失败 ${failed}${stoppedAt ? ` / 中止 ${stoppedAt}` : ''}`;
   log(msg);
   return { scored: progress, failed, stopped: stoppedAt, skipped: allKeys.length - targetKeys.length };

@@ -8,6 +8,7 @@ let DICT = null;
 const sel = { positions: new Set(), cities: new Set() };
 let keywords = [];
 let resultFilter = 'all';
+let resultView = 'cards';  // 'cards' | 'table'
 
 // ============================================================
 // 入口
@@ -85,14 +86,13 @@ async function refreshOnboardingBanner() {
     banner.className = 'show';
     banner.innerHTML = `⚠️ 第一步先到「画像」配置 — 还缺: <b>${missing.join(' / ')}</b>。 <a id="bannerJumpProfile">去填 →</a>`;
     $('bannerJumpProfile').addEventListener('click', () => switchTab('profile'));
-    // 锁住其他 tab
     document.querySelectorAll('.tab').forEach((t) => {
       if (t.dataset.panel !== 'profile') t.classList.add('locked');
     });
   } else {
-    banner.className = 'show ok';
-    banner.innerHTML = '✅ 画像就绪。<a id="bannerJumpRun">直接去跑一轮 →</a>';
-    $('bannerJumpRun').addEventListener('click', () => switchTab('run'));
+    // 画像就绪不显示绿条 — 用户嫌占地方
+    banner.className = '';
+    banner.innerHTML = '';
     document.querySelectorAll('.tab.locked').forEach((t) => t.classList.remove('locked'));
   }
 }
@@ -1050,6 +1050,8 @@ async function refreshScored() {
   const r = await chrome.runtime.sendMessage({ type: 'list_jobs' });
   const items = (r && r.ok && r.items) ? r.items : [];
   const list = $('scoredList');
+  const tableWrap = $('scoredTableWrap');
+  const tableBody = $('scoredTableBody');
 
   // 按 filter 过滤
   const filtered = items.filter((it) => {
@@ -1062,9 +1064,71 @@ async function refreshScored() {
     return true;
   });
 
+  // 切换显示
+  if (resultView === 'table') {
+    list.style.display = 'none';
+    tableWrap.style.display = 'block';
+  } else {
+    list.style.display = 'block';
+    tableWrap.style.display = 'none';
+  }
+
   if (filtered.length === 0) {
     list.innerHTML = '<div style="padding:8px;color:#9ca3af">(无)</div>';
+    if (tableBody) tableBody.innerHTML = '<tr><td colspan="7" style="padding:8px;color:#9ca3af;text-align:center">(无)</td></tr>';
     $('scoreSummary').textContent = '';
+    return;
+  }
+
+  // 表格视图 — 按分数倒序,简洁信息
+  if (resultView === 'table') {
+    const sorted = [...filtered].sort((a, b) => {
+      const order = { S: 5, A: 4, B: 3, C: 2, Reject: 1 };
+      const oa = order[a.score_priority] || 0;
+      const ob = order[b.score_priority] || 0;
+      if (ob !== oa) return ob - oa;
+      return (b.score || 0) - (a.score || 0);
+    });
+    const rows = sorted.map((it) => {
+      const prio = it.score_priority || '—';
+      const score = it.score ? `${prio} ${it.score}` : prio;
+      const isApplied = it.marked === 'applied';
+      return `
+        <tr style="border-bottom:1px solid #f3f4f6${isApplied ? ';background:#f3f9f4' : ''}" data-jobid="${escapeHtml(it.job_id)}">
+          <td style="padding:5px 6px"><span class="score-badge sb-${prio === '—' ? 'none' : prio}" style="font-size:10px">${score}</span></td>
+          <td style="padding:5px 6px">${escapeHtml(it.job_name || '')}</td>
+          <td style="padding:5px 6px">${escapeHtml(it.company_name || '')}</td>
+          <td style="padding:5px 6px;white-space:nowrap">${escapeHtml(it.salary || '')}</td>
+          <td style="padding:5px 6px;white-space:nowrap">${escapeHtml(it.city || '')}</td>
+          <td style="padding:5px 6px;color:#555">${escapeHtml((it.score_reason || '').slice(0, 50))}</td>
+          <td style="padding:5px 6px;text-align:center;white-space:nowrap">
+            <button class="tb-open outline" style="font-size:10px;padding:1px 4px">🔗</button>
+            <button class="tb-apply ${isApplied ? 'green' : 'outline'}" style="font-size:10px;padding:1px 4px">${isApplied ? '✓' : '投'}</button>
+          </td>
+        </tr>
+      `;
+    }).join('');
+    tableBody.innerHTML = rows;
+    // 行内按钮事件委托
+    tableBody.querySelectorAll('tr').forEach((tr) => {
+      const jobId = tr.dataset.jobid;
+      const item = sorted.find((x) => x.job_id === jobId);
+      tr.querySelector('.tb-open').addEventListener('click', () => {
+        if (item && item.job_url) chrome.tabs.create({ url: item.job_url });
+      });
+      tr.querySelector('.tb-apply').addEventListener('click', async () => {
+        await chrome.runtime.sendMessage({ type: 'mark_job', job_id: jobId, mark: item.marked === 'applied' ? null : 'applied' });
+        refreshScored();
+      });
+    });
+    // summary
+    const c = { S: 0, A: 0, B: 0, C: 0, Reject: 0, none: 0 };
+    for (const it of items) {
+      if (it.marked === 'not_interested') continue;
+      const p = it.score_priority || 'none';
+      c[p] = (c[p] || 0) + 1;
+    }
+    $('scoreSummary').textContent = `S ${c.S} · A ${c.A} · B ${c.B} · C ${c.C} · Reject ${c.Reject} · 未打分 ${c.none}`;
     return;
   }
 
@@ -1157,6 +1221,17 @@ document.querySelectorAll('#resultFilters .fchip').forEach((c) => {
     document.querySelectorAll('#resultFilters .fchip').forEach((x) => x.classList.remove('active'));
     c.classList.add('active');
     resultFilter = c.dataset.filter;
+    refreshScored();
+  });
+});
+// 卡片 / 表格 视图切换
+['viewCards', 'viewTable'].forEach((id) => {
+  const el = $(id);
+  if (!el) return;
+  el.addEventListener('click', () => {
+    resultView = el.dataset.view;
+    $('viewCards').classList.toggle('active', resultView === 'cards');
+    $('viewTable').classList.toggle('active', resultView === 'table');
     refreshScored();
   });
 });

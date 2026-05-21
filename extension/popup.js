@@ -9,6 +9,7 @@ const sel = { positions: new Set(), cities: new Set() };
 let keywords = [];
 let resultFilter = 'all';
 let resultView = 'cards';  // 'cards' | 'table'
+const expandedJobs = new Set();  // 用户点开过的 row,在 2.5s 自动刷新时保持展开状态
 
 // ============================================================
 // 入口
@@ -1075,7 +1076,7 @@ async function refreshScored() {
 
   if (filtered.length === 0) {
     list.innerHTML = '<div style="padding:8px;color:#9ca3af">(无)</div>';
-    if (tableBody) tableBody.innerHTML = '<tr><td colspan="7" style="padding:8px;color:#9ca3af;text-align:center">(无)</td></tr>';
+    if (tableBody) tableBody.innerHTML = '<tr><td colspan="9" style="padding:8px;color:#9ca3af;text-align:center">(无)</td></tr>';
     $('scoreSummary').textContent = '';
     return;
   }
@@ -1093,6 +1094,7 @@ async function refreshScored() {
       const prio = it.score_priority || '—';
       const score = it.score ? `${prio} ${it.score}` : prio;
       const isApplied = it.marked === 'applied';
+      const hrColor = hrActiveColor(it.hr_active);
       return `
         <tr style="border-bottom:1px solid #f3f4f6${isApplied ? ';background:#f3f9f4' : ''}" data-jobid="${escapeHtml(it.job_id)}">
           <td style="padding:5px 6px"><span class="score-badge sb-${prio === '—' ? 'none' : prio}" style="font-size:10px">${score}</span></td>
@@ -1100,6 +1102,8 @@ async function refreshScored() {
           <td style="padding:5px 6px">${escapeHtml(it.company_name || '')}</td>
           <td style="padding:5px 6px;white-space:nowrap">${escapeHtml(it.salary || '')}</td>
           <td style="padding:5px 6px;white-space:nowrap">${escapeHtml(it.city || '')}</td>
+          <td style="padding:5px 6px;white-space:nowrap;color:${hrColor}">${escapeHtml(it.hr_active || '')}</td>
+          <td style="padding:5px 6px;white-space:nowrap;color:#9ca3af">${formatRelativeTime(it.publish_time || '')}</td>
           <td style="padding:5px 6px;color:#555">${escapeHtml((it.score_reason || '').slice(0, 50))}</td>
           <td style="padding:5px 6px;text-align:center;white-space:nowrap">
             <button class="tb-open outline" style="font-size:10px;padding:1px 4px">🔗</button>
@@ -1142,15 +1146,23 @@ async function refreshScored() {
   for (const it of filtered) {
     const prio = it.score_priority || 'none';
     const row = document.createElement('div');
-    row.className = 'scored-row' + (it.marked ? ' marked-' + it.marked : '');
+    row.className = 'scored-row' + (it.marked ? ' marked-' + it.marked : '')
+      + (expandedJobs.has(it.job_id) ? ' open' : '');
     const head = document.createElement('div');
     head.className = 'head';
+    const pubBadge = it.publish_time ? `<span class="meta" style="color:#9ca3af">· ${formatRelativeTime(it.publish_time)}</span>` : '';
+    const hrBadge = it.hr_active ? `<span class="meta" style="color:${hrActiveColor(it.hr_active)}">· ${escapeHtml(it.hr_active)}</span>` : '';
     head.innerHTML = `
       <span class="score-badge sb-${prio}">${prio === 'none' ? '—' : prio === 'Reject' ? '×' : prio + (it.score ? ' ' + it.score : '')}</span>
       <span class="title">${escapeHtml(it.job_name || '')} <span style="color:#9ca3af">— ${escapeHtml(it.company_name || '')}</span></span>
       <span class="meta">${escapeHtml(it.salary || '')}</span>
+      ${hrBadge}${pubBadge}
     `;
-    head.addEventListener('click', () => row.classList.toggle('open'));
+    head.addEventListener('click', () => {
+      row.classList.toggle('open');
+      if (row.classList.contains('open')) expandedJobs.add(it.job_id);
+      else expandedJobs.delete(it.job_id);
+    });
     row.appendChild(head);
 
     const exp = document.createElement('div');
@@ -1159,7 +1171,14 @@ async function refreshScored() {
     const concerns = (it.score_concerns && it.score_concerns.length)
       ? `<div class="concerns">⚠️ ${it.score_concerns.map(escapeHtml).join(' / ')}</div>` : '';
     const pitch = it.score_pitch ? `<div class="pitch">💬 ${escapeHtml(it.score_pitch)}</div>` : '';
-    const cityMeta = `<div style="color:#9ca3af;font-size:11px">📍 ${escapeHtml(it.city || '')} ${it.area ? '· ' + escapeHtml(it.area) : ''} ${it.experience ? '· ' + escapeHtml(it.experience) : ''}</div>`;
+    const metaParts = [
+      it.city ? `📍 ${escapeHtml(it.city)}` : '',
+      it.area ? escapeHtml(it.area) : '',
+      it.experience ? escapeHtml(it.experience) : '',
+      it.publish_time ? `🕒 发布 ${escapeHtml(it.publish_time)}` : '',
+      it.hr_active ? `🟢 HR ${escapeHtml(it.hr_active)}` : '',
+    ].filter(Boolean).join(' · ');
+    const cityMeta = `<div style="color:#9ca3af;font-size:11px">${metaParts}</div>`;
     exp.innerHTML = reason + concerns + pitch + cityMeta;
 
     const actions = document.createElement('div');
@@ -1215,6 +1234,35 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// Boss publish_time 一般 "YYYY-MM-DD HH:MM:SS" 或纯时间戳字符串 → 相对时间
+function formatRelativeTime(s) {
+  if (!s) return '';
+  const t = Date.parse(s.replace(' ', 'T'));
+  if (isNaN(t)) return escapeHtml(s);
+  const diff = Date.now() - t;
+  const d = Math.floor(diff / 86400000);
+  if (d <= 0) {
+    const h = Math.floor(diff / 3600000);
+    return h <= 0 ? '刚发' : `${h}小时前`;
+  }
+  if (d < 7) return `${d}天前`;
+  if (d < 30) return `${Math.floor(d / 7)}周前`;
+  return `${Math.floor(d / 30)}月前`;
+}
+
+// HR 活跃度颜色:刚刚/今日 = 绿,昨天/X天前 = 灰,X周/月前 = 橘
+function hrActiveColor(s) {
+  if (!s) return '#9ca3af';
+  if (/刚刚|分钟|小时|今日|今天|在线/.test(s)) return '#2a9d4a';
+  if (/天前/.test(s)) {
+    const m = s.match(/(\d+)\s*天前/);
+    if (m && +m[1] <= 3) return '#84a84a';
+    return '#9ca3af';
+  }
+  if (/周前|月前/.test(s)) return '#c87b3a';
+  return '#9ca3af';
+}
+
 // 结果过滤 chips
 document.querySelectorAll('#resultFilters .fchip').forEach((c) => {
   c.addEventListener('click', () => {
@@ -1260,6 +1308,7 @@ $('downloadCsv').addEventListener('click', async () => {
   const headers = [
     '分级', '分数', '岗位', '公司', '薪资', '城市', '区域',
     '经验', '学历', '行业', '公司规模', '融资',
+    '发布时间', 'HR 活跃度', 'HR 姓名', 'HR 职位',
     '评分理由', '担忧', '招呼语', '简历版本',
     '链接', '标记', '抓取时间',
   ];
@@ -1283,6 +1332,10 @@ $('downloadCsv').addEventListener('click', async () => {
     it.industry || '',
     it.company_size || '',
     it.financing || '',
+    it.publish_time || '',
+    it.hr_active || '',
+    it.hr_name || '',
+    it.hr_title || '',
     it.score_reason || '',
     Array.isArray(it.score_concerns) ? it.score_concerns.join(' / ') : '',
     it.score_pitch || '',

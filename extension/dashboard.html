@@ -70,8 +70,11 @@
 </head>
 <body>
 <div class="container">
-  <h1>📊 Boss 雷达 · 数据池全屏看板</h1>
-  <div class="subtitle" id="meta">加载中...</div>
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:4px">
+    <h1 style="margin:0">📊 Boss 雷达 · 全屏看板</h1>
+    <button id="closeBtn" class="btn" style="margin-left:auto" title="关闭看板,返回 Chrome 普通浏览(也可以直接 ⌘W 关闭这个 tab)">✕ 关闭看板</button>
+  </div>
+  <div class="subtitle" id="meta">加载中... <span style="color:#9ca3af;margin-left:8px">关掉这个 tab 即可回到 popup;点扩展图标可重新打开</span></div>
 
   <div class="toolbar">
     <span class="fchip active" data-filter="all">全部</span>

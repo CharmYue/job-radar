@@ -212,6 +212,17 @@ document.querySelectorAll('th[data-sort]').forEach((th) => {
   });
 });
 $('refreshBtn').addEventListener('click', loadJobs);
+$('closeBtn').addEventListener('click', async () => {
+  // 关掉当前 tab — 先试 chrome.tabs.remove(currentTabId),不行 fallback window.close()
+  try {
+    const tab = await chrome.tabs.getCurrent();
+    if (tab && tab.id) {
+      await chrome.tabs.remove(tab.id);
+      return;
+    }
+  } catch (e) {}
+  try { window.close(); } catch (e) {}
+});
 $('csvBtn').addEventListener('click', () => {
   const sorted = sortRows(applyFilters());
   const headers = [

@@ -81,7 +81,7 @@ async function refreshOnboardingBanner() {
   const active = a.provider || 'deepseek';
   const cfg = (a.providers && a.providers[active]) || {};
   if (!cfg.api_key) missing.push('LLM API key');
-  if (!a.wxpusher_token || !a.wxpusher_uid) missing.push('WxPusher');
+  // WxPusher 非必填 — 不填就只用 PC 端看,跳过微信推送
 
   if (missing.length > 0) {
     banner.className = 'show';
@@ -394,24 +394,29 @@ function renderChecklist(p, a) {
   const active = a.provider || 'deepseek';
   const providerCfg = (a.providers && a.providers[active]) || {};
   const providerName = (CURRENT_PROVIDERS_META && CURRENT_PROVIDERS_META[active]?.name) || active;
-  const items = [
+  // 必填项 - 不填就不能跑流水线
+  const requiredItems = [
     { label: '你的需求', ok: !!p.summary },
     { label: '完整简历', ok: !!p.resume_md && p.resume_md.length > 100 },
     { label: '薪资期望', ok: !!(p.target_monthly_min && p.target_monthly_max) },
     { label: `${providerName} API key`, ok: !!providerCfg.api_key },
-    { label: 'WxPusher Token', ok: !!a.wxpusher_token },
-    { label: 'WxPusher UID', ok: !!a.wxpusher_uid },
   ];
-  const done = items.filter((x) => x.ok).length;
+  // 可选项 - 不填就跳过微信推送,只在 PC 端看
+  const optionalItems = [
+    { label: 'WxPusher Token', ok: !!a.wxpusher_token, optional: true },
+    { label: 'WxPusher UID', ok: !!a.wxpusher_uid, optional: true },
+  ];
+  const items = [...requiredItems, ...optionalItems];
+  const doneRequired = requiredItems.filter((x) => x.ok).length;
   $('completionChecklist').innerHTML = items.map((x) => `
-    <div class="checklist-item ${x.ok ? 'done' : 'todo'}">
-      <span>${x.ok ? '✓' : '○'} ${x.label}</span>
-      <span class="status">${x.ok ? '已填' : '缺'}</span>
+    <div class="checklist-item ${x.ok ? 'done' : (x.optional ? 'opt' : 'todo')}">
+      <span>${x.ok ? '✓' : (x.optional ? '◇' : '○')} ${x.label}${x.optional ? ' <span style="color:#9ca3af;font-size:10px">(可选,只 PC 端看可不填)</span>' : ''}</span>
+      <span class="status">${x.ok ? '已填' : (x.optional ? '可选' : '缺')}</span>
     </div>
   `).join('') + `
     <div class="checklist-item" style="border-top:1px solid #e5e7eb;margin-top:4px;padding-top:6px;font-weight:600">
-      <span>总完成度</span>
-      <span class="status" style="color:${done === items.length ? '#2a9d4a' : '#c33'}">${done}/${items.length}</span>
+      <span>必填完成度</span>
+      <span class="status" style="color:${doneRequired === requiredItems.length ? '#2a9d4a' : '#c33'}">${doneRequired}/${requiredItems.length}</span>
     </div>
   `;
 }

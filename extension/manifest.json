@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Boss 求职雷达",
-  "version": "6.2.0",
+  "version": "6.2.1",
   "description": "Boss直聘批量采集 + DeepSeek AI 适配度打分 + WxPusher 微信推送一体化。",
   "permissions": [
     "storage",

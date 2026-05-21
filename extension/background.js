@@ -2231,8 +2231,10 @@ function buildTierReport(items, tier, label, dateStr, totalCounts) {
 
 async function pushNow() {
   const api = await getApiConfig();
+  // WxPusher 非必填 — 没配 token/uid 就跳过推送,纯 PC 端用户也能跑完流水线
   if (!api.wxpusher_token || !api.wxpusher_uid) {
-    throw new Error('未配置 WxPusher,先去画像标签填');
+    log('⊘ 跳过 WxPusher 推送(未配置 token/uid)— 直接在 popup 数据池或 🖥 全屏看板查看');
+    return { total: 0, skipped: true };
   }
   const jobsMap = await getJobsMap();
   // 推送时排除已标记 not_interested

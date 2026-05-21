@@ -316,10 +316,13 @@ async function pruneOldJobs(opts = {}) {
 
 // #1 lite: pipelineState 持久化 — SW 被 Chrome 杀掉后,
 // popup 重开能识别"上次跑到 X 阶段、超过 N 分钟无心跳 = SW 已死"
+// ⚠ 这是 UI 显示状态 (stage='crawling'/'scoring'/'pushing')
+// 跟状态机的 pipelineRun (stage='crawl'/'score'/'push') 是两回事,绝对不能共用 storage key。
+// 写到独立的 `pipelineSnapshot`。
 async function persistPipelineState() {
   try {
     await chrome.storage.local.set({
-      pipelineRun: {
+      pipelineSnapshot: {
         stage: pipelineState.stage,
         startedAt: pipelineState.startedAt,
         stageStartedAt: pipelineState.stageStartedAt,
@@ -334,9 +337,24 @@ async function persistPipelineState() {
   } catch (e) {}
 }
 async function loadPersistedPipelineState() {
-  return (await chrome.storage.local.get('pipelineRun')).pipelineRun || null;
+  return (await chrome.storage.local.get('pipelineSnapshot')).pipelineSnapshot || null;
 }
 // SW 启动时:如果 storage 里有"活跃"状态 但很久没心跳 → 认定 SW 死过 → 复位
+// 6.0.4 一次性迁移:旧版本(6.0.0-6.0.3)曾把 UI 状态写到 `pipelineRun`,
+// 用 stage='crawling/scoring/pushing'(状态机不认),会造成死锁。
+// 检测这种损坏的 run 并清掉。
+async function migrateBrokenPipelineRun() {
+  const r = (await chrome.storage.local.get('pipelineRun')).pipelineRun;
+  if (!r) return;
+  // 状态机 run 必有 id + config;UI snapshot 没这俩字段
+  const isStateMachineRun = r.id && r.config;
+  const hasUIStage = ['crawling', 'scoring', 'pushing', 'idle'].includes(r.stage);
+  if (hasUIStage && !isStateMachineRun) {
+    console.warn('[boot] 清掉 6.0.3 误写的 pipelineRun (stage=' + r.stage + ')');
+    await chrome.storage.local.remove('pipelineRun');
+  }
+}
+
 async function reconcileStaleRunOnBoot() {
   const persisted = await loadPersistedPipelineState();
   if (!persisted) return;
@@ -365,8 +383,9 @@ let _bootDone = null;  // 等 boot 的 Promise(给 advancePipelineRun 用)
 const _bootDonePromise = new Promise((r) => { _bootDone = r; });
 
 (async () => {
-  // 顺序:迁 IDB → 立刻把 running 标 pending 不让任何人误读 → prune → 完整 reconcile
+  // 顺序:迁 IDB → 清掉 6.0.3 误写的 pipelineRun → 重置 running → prune → 完整 reconcile
   try { await migrateChromeStorageToIdb(); } catch (e) { console.warn('[boot] idb migrate', e); }
+  try { await migrateBrokenPipelineRun(); } catch (e) { console.warn('[boot] migrate broken run', e); }
   try { await earlyResetRunningTasks(); } catch (e) { console.warn('[boot] early reset', e); }
   try { await pruneOldJobs(); } catch (e) { console.warn('[boot] prune', e); }
   try { await reconcileStaleRunOnBoot(); } catch (e) { console.warn('[boot] stale reconcile', e); }

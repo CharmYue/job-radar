@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Boss 雷达 · 全屏看板</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    margin: 0;
+    background: #f9fafb;
+    color: #1f2937;
+    font-size: 13px;
+  }
+  .container { max-width: 1600px; margin: 0 auto; padding: 16px 20px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .subtitle { color: #6b7280; font-size: 12px; margin-bottom: 12px; }
+  .toolbar {
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    background: #fff; padding: 10px 12px; border: 1px solid #e5e7eb;
+    border-radius: 6px; margin-bottom: 10px;
+    position: sticky; top: 0; z-index: 10;
+  }
+  .toolbar input[type="text"] {
+    border: 1px solid #d1d5db; border-radius: 4px; padding: 5px 8px;
+    font-size: 12px; min-width: 200px;
+  }
+  .fchip {
+    display: inline-block; padding: 3px 10px; border-radius: 12px;
+    border: 1px solid #d1d5db; cursor: pointer; font-size: 12px;
+    background: #fff; user-select: none;
+  }
+  .fchip.active { background: #1d3557; color: #fff; border-color: #1d3557; }
+  .btn { padding: 5px 12px; font-size: 12px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer; }
+  .btn:hover { background: #f3f4f6; }
+  .btn.green { background: #2a9d4a; color: #fff; border-color: #2a9d4a; }
+  .summary { color: #6b7280; font-size: 12px; margin-left: auto; }
+
+  table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e5e7eb; }
+  thead { background: #f9fafb; position: sticky; top: 56px; z-index: 5; }
+  th, td { padding: 8px 10px; border-bottom: 1px solid #f3f4f6; text-align: left; vertical-align: top; }
+  th { font-weight: 600; font-size: 12px; cursor: pointer; user-select: none; white-space: nowrap; }
+  th:hover { background: #f3f4f6; }
+  th .sort-arrow { color: #9ca3af; margin-left: 3px; font-size: 10px; }
+  th.sorted .sort-arrow { color: #1d3557; }
+  td { font-size: 12px; }
+  tr:hover td { background: #fafbfc; }
+  tr.applied { background: #f3f9f4; }
+  tr.applied:hover td { background: #ecf6ee; }
+
+  .badge { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 11px; font-weight: 600; }
+  .sb-S { background: #ffe8c2; color: #8a4500; }
+  .sb-A { background: #d8eafd; color: #1d4ed8; }
+  .sb-B { background: #e7f4d8; color: #4a7c10; }
+  .sb-C { background: #f0f0f0; color: #555; }
+  .sb-Reject { background: #fde2e1; color: #9b1c1c; }
+  .sb-none { background: #f0f0f0; color: #999; }
+
+  .hr-fresh { color: #2a9d4a; font-weight: 600; }
+  .hr-recent { color: #84a84a; }
+  .hr-stale { color: #c87b3a; }
+  .hr-old { color: #9ca3af; }
+  .reason { color: #4b5563; max-width: 360px; }
+
+  td a { color: #1d4ed8; text-decoration: none; }
+  td a:hover { text-decoration: underline; }
+  .action-cell { white-space: nowrap; }
+  .action-cell button { font-size: 11px; padding: 2px 6px; margin-right: 2px; }
+  .empty { padding: 40px; text-align: center; color: #9ca3af; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>📊 Boss 雷达 · 数据池全屏看板</h1>
+  <div class="subtitle" id="meta">加载中...</div>
+
+  <div class="toolbar">
+    <span class="fchip active" data-filter="all">全部</span>
+    <span class="fchip" data-filter="S">S</span>
+    <span class="fchip" data-filter="A">A</span>
+    <span class="fchip" data-filter="B">B</span>
+    <span class="fchip" data-filter="C">C</span>
+    <span class="fchip" data-filter="Reject">Reject</span>
+    <span class="fchip" data-filter="unscored">未打分</span>
+    <span class="fchip" data-filter="applied">已投</span>
+    <input type="text" id="search" placeholder="搜索 岗位/公司/理由...">
+    <button id="refreshBtn" class="btn">🔄 刷新</button>
+    <button id="csvBtn" class="btn green">📥 CSV</button>
+    <span class="summary" id="summary"></span>
+  </div>
+
+  <div id="tableWrap">
+    <table id="dataTable">
+      <thead>
+        <tr>
+          <th data-sort="priority">分 <span class="sort-arrow">▾</span></th>
+          <th data-sort="score">分数 <span class="sort-arrow"></span></th>
+          <th data-sort="job_name">岗位 <span class="sort-arrow"></span></th>
+          <th data-sort="company_name">公司 <span class="sort-arrow"></span></th>
+          <th data-sort="salary">薪资 <span class="sort-arrow"></span></th>
+          <th data-sort="city">城市 <span class="sort-arrow"></span></th>
+          <th data-sort="experience">经验 <span class="sort-arrow"></span></th>
+          <th data-sort="hr_active" title="HR 上次活跃">HR <span class="sort-arrow"></span></th>
+          <th data-sort="publish_time">发布 <span class="sort-arrow"></span></th>
+          <th>评分理由</th>
+          <th>担忧</th>
+          <th>链接</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <tr><td colspan="13" class="empty">加载中...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script src="dashboard.js"></script>
+</body>
+</html>

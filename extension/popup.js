@@ -1283,6 +1283,10 @@ document.querySelectorAll('#resultFilters .fchip').forEach((c) => {
     refreshScored();
   });
 });
+// 全屏看板 — 开新 tab,数据多/列多时舒服很多
+$('openDashboard').addEventListener('click', () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') });
+});
 // CSV 下载 — 当前 filter 下的全部条目
 $('downloadCsv').addEventListener('click', async () => {
   const r = await chrome.runtime.sendMessage({ type: 'list_jobs' });

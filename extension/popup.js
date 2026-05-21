@@ -1235,6 +1235,78 @@ document.querySelectorAll('#resultFilters .fchip').forEach((c) => {
     refreshScored();
   });
 });
+// CSV 下载 — 当前 filter 下的全部条目
+$('downloadCsv').addEventListener('click', async () => {
+  const r = await chrome.runtime.sendMessage({ type: 'list_jobs' });
+  const items = (r && r.ok && r.items) ? r.items : [];
+  const filtered = items.filter((it) => {
+    if (resultFilter === 'all') return it.marked !== 'not_interested';
+    if (resultFilter === 'S') return it.score_priority === 'S';
+    if (resultFilter === 'A') return it.score_priority === 'A';
+    if (resultFilter === 'B') return it.score_priority === 'B';
+    if (resultFilter === '未打分') return !it.score_priority;
+    if (resultFilter === '已投') return it.marked === 'applied';
+    return true;
+  });
+  // 按分档排序
+  const order = { S: 5, A: 4, B: 3, C: 2, Reject: 1 };
+  filtered.sort((a, b) => {
+    const oa = order[a.score_priority] || 0;
+    const ob = order[b.score_priority] || 0;
+    if (ob !== oa) return ob - oa;
+    return (b.score || 0) - (a.score || 0);
+  });
+
+  const headers = [
+    '分级', '分数', '岗位', '公司', '薪资', '城市', '区域',
+    '经验', '学历', '行业', '公司规模', '融资',
+    '评分理由', '担忧', '招呼语', '简历版本',
+    '链接', '标记', '抓取时间',
+  ];
+  const csvEscape = (v) => {
+    const s = v == null ? '' : String(v);
+    if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
+      return '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+  };
+  const rows = filtered.map((it) => [
+    it.score_priority || '',
+    it.score != null ? it.score : '',
+    it.job_name || '',
+    it.company_name || '',
+    it.salary || '',
+    it.city || '',
+    it.area || '',
+    it.experience || '',
+    it.education || '',
+    it.industry || '',
+    it.company_size || '',
+    it.financing || '',
+    it.score_reason || '',
+    Array.isArray(it.score_concerns) ? it.score_concerns.join(' / ') : '',
+    it.score_pitch || '',
+    it.score_resume_version || '',
+    it.job_url || '',
+    it.marked || '',
+    it.crawl_time || '',
+  ].map(csvEscape).join(','));
+  // BOM 让 Excel 识别 UTF-8 中文
+  const csv = '﻿' + headers.join(',') + '\n' + rows.join('\n');
+
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const today = new Date().toISOString().slice(0, 10);
+  const tagPart = resultFilter === 'all' ? 'all' : resultFilter;
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `boss-${today}-${tagPart}-${filtered.length}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  appendLog(`📥 已下载 ${filtered.length} 条到 ${a.download}`);
+});
 
 // ─────────────────────── Pipeline 按钮 ───────────────────────
 // 每日自动跑 toggle

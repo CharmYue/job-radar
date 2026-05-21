@@ -1,151 +1,133 @@
-# job-radar
+# 🎯 求职雷达 · Job Radar
 
-个人求职雷达 —— 自动抓 ATS 岗位 + Boss直聘,用 LLM 按你的简历打分,每天一份 Markdown 摘要推到微信。
+> **AI 帮你扫 Boss直聘 — 一键采集、智能打分、按你的简历挑出最对路的岗位。**
+>
+> 一个 Chrome 扩展。**不发请求、不爬接口**,只观察你浏览器里 Boss 自家 JS 的返回数据 → 风控难度直接降一档。
+>
+> 配你的简历 + 偏好 → 跑一轮 → S/A 级岗位一目了然 → 可选微信推送。
 
-> 私人项目,假设你是 AI Solution Engineer / Customer Engineer 方向。Boss 部分依赖随仓库附带的 Chrome 扩展(`extension/`)。
+![version](https://img.shields.io/badge/version-6.2.1-brightgreen) ![Chrome MV3](https://img.shields.io/badge/Chrome-MV3-blue) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
-## 它做什么
+---
 
-两条独立的 pipeline:
+## 它解决什么
 
-**ATS pipeline(早 6:30 自动 / Python + launchd)**
-抓取配置好的 Greenhouse / Lever / SmartRecruiters / Workday 接口 + 一轮 Brave Search → 城市/角色预筛 → DeepSeek V4 拿 `data/resume.md` + `config/profile.yaml` 打分 → WxPusher 推送精简报告到微信。
+Boss直聘上一天几百个岗位,**人肉筛选 2-3 小时**,还容易漏:
 
-**Boss pipeline(手动 / Chrome 扩展全程自治)**
-扩展猴补丁 `window.fetch`,**只观察 Boss 自家 JS 发的 `/joblist.json` 返回 JSON**(自己不发请求,风控难度直接降一档,而且能拿原始 22 字段:`salaryDesc`、公司规模、融资阶段、福利、技能、HR 活跃度...)。配置 → 采集 → DeepSeek 打分 → WxPusher 推送,**全在扩展里完成**,不用终端。可选导出 `boss_<日期>.json` 进 SQLite 归档。
+- 标题党("AI 算法工程师"实际上是 Python 后端)
+- 薪资字段经常残缺(列表里看到 `-K·薪` 这种乱码)
+- HR 已经几周没活跃了你还在投
+- 大厂 / 创业公司 / 加班程度 / 通勤距离 / 技术栈匹配 — 全靠人脑权衡
 
-每次 ATS 跑会在 SQLite 留 30 天去重记录,完整报告写到 `data/report_<日期>.md`。
+**求职雷达**:你把简历 + 偏好(薪资 / 大厂 / 不加班 / 稳定 / 通勤 / 技术栈 6 维权重)告诉它,它扫一遍给每个岗位打分(S→A→B→C→Reject),按分级排好,带评分理由 + 担忧点 + 招呼语建议。
 
-## 为什么不直接 Playwright + 模拟抓 API
+---
 
-试过,Boss 风控很严:
-- Headless Playwright 几乎当场被识别
-- 即使带真实 cookie,直接调 `/joblist.json` 一两次就 `code=37` 风控拉黑
-- 列表页 DOM 里薪资被 `kanzhun-mix` webfont 混淆,看到的是 `-K·薪` 这种鬼东西
+## ✨ 功能亮点
 
-现在的扩展方案:**注入到主世界,只拦截 Boss 前端自己发的请求**,所有签名 / token / 浏览器指纹是真实用户级别,风控难度直接降一个数量级,而且能拿原始 JSON。
+| | |
+|---|---|
+| 🛡 **零接口爬取** | 注入主世界 monkey-patch `fetch`/XHR,**只观察** Boss 自家 JS 返回的 `/joblist.json` + `/job/detail.json`,自己不发请求 — 风控几乎拿你没办法 |
+| 🤖 **7 个 AI 模型可选** | DeepSeek / 通义 / 豆包 / MiniMax / 智谱 / OpenAI / Claude — 用你自己的 API key |
+| 🎯 **多维度打分** | 不是简单关键词匹配。简历 + 7 维星级权重(薪资/大厂/不加班/稳定/通勤/技术栈契合 + 住址)综合打 S→A→B→C→Reject 5 档 |
+| ⚡ **可靠性** | MV3 SW 死掉能自动续跑、IndexedDB 抗 race / 抗 quota、增量保存、指纹去重避免重打分 |
+| 📊 **看板** | popup 卡片视图 / 表格视图 + **🖥 全屏看板**(独立 tab,排序/搜索/筛选)+ **📥 CSV 一键导出** |
+| 📨 **可选微信推送** | WxPusher 集成,跑完推 S/A 级到微信。**纯 PC 党可不填,在看板查结果** |
+| 🌐 **HR 活跃度** | 每条岗位带 HR 上次活跃时间 — 一眼看出"是死岗还是真招" |
+| ⏰ **定时自动跑** | chrome.alarms 每天指定时间自动 fire,Chrome 开着就行 |
 
-## 前置条件
+---
 
-- **macOS**(Linux 也行,把 launchd 换成 cron / systemd)
-- **Python 3.11+** 加 [uv](https://docs.astral.sh/uv/)
-- **Chrome** + 仓库里的 `extension/` 加载为开发者模式扩展
-- API 账号:
-  - **DeepSeek V4** —— 主打分模型([deepseek.com](https://platform.deepseek.com))
-  - **Azure OpenAI** —— 可选 fallback
-  - **WxPusher** —— 免费,微信推送通道([wxpusher.zjiecode.com](https://wxpusher.zjiecode.com))
-  - **Brave Search** —— 免费 tier([brave.com/search/api](https://brave.com/search/api/))
+## 🚀 5 分钟跑起来
 
-## 安装
-
-```bash
-git clone https://github.com/CharmYue/job-radar.git ~/job-radar
-cd ~/job-radar
-
-# 1. 装依赖
-uv sync
-
-# 2. 配置 API key
-cp .env.example .env
-$EDITOR .env                            # 填入各家 API key
-
-# 3. 配置个人画像和简历
-cp config/profile.example.yaml config/profile.yaml
-$EDITOR config/profile.yaml             # 设置目标薪资、岗位关键词、hard reject
-$EDITOR data/resume.md                  # 粘贴完整简历(Markdown 即可)
-
-# 4. (可选)ATS 目标公司
-$EDITOR config/ats_targets.yaml         # Greenhouse / Lever 等的公司 slug
-
-# 5. 安装 Chrome 扩展(详见 docs/extension.md)
-#    chrome://extensions/ → 开发者模式 → 加载已解压扩展 → 选 extension/ 目录
-
-# 6. Dry-run 验证 — 用仓库自带 sample
-uv run python scripts/run_daily.py --import data/sample_jobs.json --dry-run
-```
-
-## 每日自动跑(早 6:30)
+### 1. 装扩展
 
 ```bash
-# 把示例 plist 里的 __HOME__ 替换成你的 $HOME,再 load:
-sed "s|__HOME__|$HOME|g" launchd/com.jobradar.daily.example.plist \
-  > ~/Library/LaunchAgents/com.jobradar.daily.plist
-launchctl load -w ~/Library/LaunchAgents/com.jobradar.daily.plist
-
-# 17:00 的 Boss 提醒同理:
-sed "s|__HOME__|$HOME|g" launchd/com.jobradar.bossreminder.example.plist \
-  > ~/Library/LaunchAgents/com.jobradar.bossreminder.plist
-launchctl load -w ~/Library/LaunchAgents/com.jobradar.bossreminder.plist
+git clone https://github.com/CharmYue/job-radar.git
 ```
 
-跑完看 `data/daily_out.log` / `data/jobradar.log`。完整报告在 `data/report_<日期>.md`,SQLite 去重库是 `data/jobs.db`。
+打开 `chrome://extensions/` → 右上角开**开发者模式** → 点**加载已解压的扩展程序** → 选 `extension/` 目录。
 
-## Boss 采集(手动,扩展全程自治)
+(看不到图标就在工具栏右边点拼图,把"Boss 求职雷达"钉住。)
 
-详见 [docs/extension.md](docs/extension.md)。简化流程:
+### 2. 配画像 + AI key
 
-**首次配置(只做一次)** —— 点扩展图标 → **个人画像** tab:粘贴 summary + 完整简历 Markdown + 目标月薪 + S/A 级关键词 + 硬拒关键词 + DeepSeek key + WxPusher token/uid → **保存**
+点扩展图标 → **画像** tab:
 
-**每日跑** —— **配置** tab:
-- 职位树勾选(售前/售后/客户成功)+ **关键词自由输入**(每行一个)
-- 城市勾选
-- 筛选:经验 / 学历 / **薪资区间** / **发布时间** / **公司过滤**
-- 点**生成任务队列** → 切到**运行** tab
+- **你的需求**:一句话,例 "找 AI 解决方案岗位,年包 45-55,大厂优先,稳定不加班"
+- **完整简历**:粘贴你的 Markdown 简历(技术栈、年限、项目经验)
+- **薪资期望**:拖滑块(月薪下限 / 上限 / 年包目标)
+- **偏好权重**:6 维星级(薪资 / 大厂 / 不加班 / 稳定 / 通勤 / 技术栈契合)
+- **AI 模型**:选 provider(推荐 DeepSeek,便宜快),填 API key,点 🧪 **测试模型连通**
+- **WxPusher**(可选):想微信收推送就填,不填只用 PC 看
 
-**运行** tab:
-1. **开始采集** —— 浏览器最小化窗口跑,数据池累计
-2. **AI 全部打分** —— DeepSeek 并发 3 跑,数据池每条岗位贴上 S/A/B/C/X 标签
-3. **一键推送 WxPusher** —— 自动拼 Markdown,只发 S+A+B 级,推到微信
+填完自动保存。
 
-整个 Boss 流程 10-15 分钟,全程不用终端。Boss 弹验证码或风控时扩展自动停,2-4 小时后再试。
+### 3. 在 Boss 上扫码登录
 
-## 仓库结构
+打开 `https://www.zhipin.com/`,正常扫码登录 — 扩展用你这个会话工作。
+
+### 4. 配搜索
+
+回扩展 → **搜索** tab:
+
+- **关键词** chips:输入想搜的岗位(例 "AI 解决方案" / "Solution Engineer"),回车加 chip
+- **城市**:勾上海/杭州/北京/...
+- **每个关键词最多抓**:下拉选 约 30 / 60(推荐)/ 120 / 300
+- **筛选**:经验 / 学历 / 发布时间(薪资建议留空,LLM 按你画像精确评)
+- 点 ✓ **生成任务队列**
+
+### 5. 跑一轮
+
+切到 **运行** tab → 点 **🚀 跑一轮**。
+
+扩展会:
+1. **采集**:打开 Boss 列表页(可最小化),滚动抓数据,每个任务之间用 alarm 接力(SW 死了自动续跑)
+2. **打分**:LLM 并发 6 路给每个岗位评分,带理由 + 担忧 + 招呼语
+3. **推送**(可选):WxPusher 拆 S 级和 A 级两次推送到微信
+
+跑完点 **🖥 全屏** 看完整看板,按公司/分数/HR 活跃度排序,标记已投或屏蔽烂公司,**📥 CSV** 一键导 Excel。
+
+---
+
+## 📂 目录
 
 ```
-src/job_radar/
-  models.py        # Job、ScoredJob 数据类
-  score.py         # DeepSeek 主 + AsyncAzureOpenAI fallback,Semaphore(3)
-  push.py          # WxPusher REST(httpx,content 上限 10000 字)
-  storage.py       # SQLite jobs + daily_reports
-  report.py        # build_report() 完整版 + build_compact_report() 推送版
-  brave_searcher.py
-  scrapers/        # Greenhouse / Lever / SmartRecruiters / Workday + runner
-
-scripts/
-  run_daily.py     # 主入口:--import | --ats-only | --dry-run | --no-dedup
-  push_reminder.py # 17:00 微信戳一下提醒打开 Boss 采集扩展
-  debug_push.py    # WxPusher 推送测试
-
-config/
-  profile.example.yaml      # 模板 — copy 成 profile.yaml 再填
-  ats_targets.yaml          # 要查的公司 slug 清单
-
-extension/                  # Boss 采集 Chrome 扩展(MV3)
-  manifest.json
-  injected.js               # 主世界,猴补丁 fetch / XHR
-  content.js                # 隔离世界,转发数据 + 行为模拟
-  background.js             # SW 编排器,任务队列 + 风控感知 + 导出
-  popup.html / popup.js     # UI
-  dict.json                 # Boss 职位 / 城市 / 行业 三级 taxonomy
-
-launchd/                    # macOS 定时任务模板(load 前替换 __HOME__)
-docs/
-  extension.md              # 扩展安装 + 使用细节
-data/
-  sample_jobs.json          # demo 输入 — 可以 commit
-  resume.md                 # 你的简历(gitignored)
-  jobs.db                   # SQLite 去重 + 报告归档(gitignored)
-  report_<日期>.md          # 每日完整报告(gitignored)
+extension/
+  manifest.json           Chrome MV3 配置
+  injected.js             主世界:monkey-patch fetch/XHR 观察 Boss 数据
+  content.js              隔离世界:消息转发 + 滚动/点击操控
+  background.js           SW 状态机:采集 → IndexedDB → 打分 → 推送
+  popup.html / popup.js   主 UI (画像 / 搜索 / 运行 / 历史 4 tab)
+  dashboard.html / dashboard.js   🖥 全屏看板(独立 tab)
+  dict.json               Boss 职位/城市/行业三级 taxonomy
 ```
 
-## 已知限制
+`scripts/` + `src/job_radar/` + `launchd/` 是早期 Python ATS 爬取的 pipeline(Greenhouse / Lever / Workday 直接调 API),独立于 Chrome 扩展。新用户只装扩展就够。
 
-- **扩展依赖 DOM 选择器**:Boss 改前端时 `.job-card-wrapper` 这种可能失效,需要在 `extension/content.js` 改 `SELECTORS` 数组。
-- **API 字段重命名**:Boss 偶尔改字段名(如 `salaryDesc` → `salary`),看 Network 实际 JSON 然后改 `extension/background.js normalize()`。
-- **Boss session 会过期**:Chrome 里定期重新扫码登录。
-- **launchd 不展开 `$HOME`**:示例 plist 用 `__HOME__` 占位,load 前必须替换。
-- **个人数据**:`config/profile.yaml`、`data/resume.md`、`data/*.json`、`data/*.md`、`data/boss_state.json`、`data/jobs.db` 都在 `.gitignore` 里。第一次 commit 前再 `git status` 过一眼最稳。
+---
+
+## 🛠 技术细节
+
+- **MV3 状态机**:`runPipeline` 是 alarm 驱动的 state machine。每个采集任务 / 打分批次都是独立"单元",写完 IDB 用 `chrome.alarms` 调度下一步。SW 被 Chrome 杀掉照样从 storage 续跑。
+- **数据层**:IndexedDB store `jobs` 主键 `job_id`,索引 `score_priority / crawl_time_ts / user_marked / company_name`。所有写都是单条 atomic,告别"全图读 → 改 → 写"的 race。
+- **打分指纹**:`PROMPT_VERSION + provider + model + djb2(profile) + djb2(job content)`。改简历 / 换 model / 拿到 full_jd 自动触发重打,不变就直接跳过。
+- **风控感知**:连续 3 次拿到 Boss `code=37` 自动冷却 30 分钟。
+
+详见 [`docs/extension.md`](docs/extension.md)。
+
+---
+
+## 🤝 贡献 / Issue
+
+代码量 ~5000 行,主要在 `extension/background.js`(SW)+ `popup.js`(UI)+ `dashboard.js`(看板)。欢迎:
+
+- 🐛 Bug 反馈(SW 续跑异常 / IDB 数据丢失 / 风控触发 / 打分明显跑偏)
+- 🎨 新功能 PR(其他求职平台?其他 LLM?数据可视化?)
+- 📝 文档改进
+
+---
 
 ## License
 
-MIT —— 见 [LICENSE](LICENSE)。
+MIT — 见 [LICENSE](LICENSE)。

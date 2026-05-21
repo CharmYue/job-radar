@@ -609,6 +609,68 @@ $('apiProviderModel').addEventListener('change', () => {
 });
 
 $('saveProfile').addEventListener('click', saveProfileFromUI);
+
+// 一键填入演示画像 — 方便新用户试用 / 截图录像 / 视频 demo
+$('fillDemoProfile').addEventListener('click', () => {
+  if (!confirm('一键填入演示画像?\n会覆盖 summary / 简历 / 月薪 / 偏好 / 住址等字段。\nAPI key 和 WxPusher 不动。\n\n继续?')) return;
+
+  $('pfSummary').value = '找 AI 解决方案 / Customer Engineer / 出海方向的岗位,年包 45-55,大厂或独角兽优先,稳定不加班。能远程或在上海/杭州/北京其中之一,不投朝阳区。';
+
+  $('pfResume').value = `# 个人简介
+
+工作 5 年,2 年 AI 应用工程师 + 3 年云端解决方案。当前关注 LLM 应用、Agent 框架、AI 出海方向。
+
+## 技术栈
+
+- **AI / LLM**: GPT-4 / Claude / DeepSeek 全协议;LangChain、LlamaIndex、自研 Agent 框架;RAG 端到端调优(检索 + rerank + 后置过滤)
+- **后端**: Python (FastAPI / asyncio),Node.js,Go;PostgreSQL / Redis / ClickHouse
+- **基础设施**: Azure (主),AWS,Kubernetes,Terraform;Entra ID / SSO
+- **客户工程**: 售前 demo、POC、技术架构方案撰写、客户成功跟进
+
+## 项目经验
+
+### 某出海 SaaS 公司 · AI 解决方案工程师 · 2023-至今
+
+- 主导 RAG + Agent 系统从 0 到 1,服务 50+ 海外企业客户,月活 10w+
+- 通过 prompt 优化 + retrieval 重排,模型成本从月 ¥80k 降到 ¥25k
+- 兼任 3 个核心客户的 TAM,推动 ARR 从 $200k 到 $1.2M
+
+### 某云厂商 · 解决方案工程师 · 2021-2023
+
+- 负责 Azure / Entra ID / Microsoft Graph 企业接入方案
+- 给 20+ 跨国客户做 SSO + MFA + 条件访问 POC
+- 客户成功率从入职时 60% 提升到离职时 90%
+
+### 教育背景
+
+- 某 985 计算机本科
+- AWS Solutions Architect Professional · 微软认证 Azure Solutions Architect
+
+## 个人偏好
+
+希望工作 AI 应用方向 (LLM / RAG / Agent),不接受纯算法岗 / 纯前端 / 纯运维 / 外包。
+`;
+
+  setSlider('pfMonthlyMin', 35);
+  setSlider('pfMonthlyMax', 55);
+  setSlider('pfAnnual', 500);  // 50w
+
+  $('pfHomeDistrict').value = '上海·浦东·张江';
+  $('pfOtherPrefs').value = '不投朝阳区。不接受纯外包。35K 以下不投。';
+
+  // 6 维偏好星级:薪资 4 / 大厂 5 / 不加班 5 / 稳定 4 / 通勤 3 / 技术栈契合 5
+  CURRENT_PRIORITIES = {
+    salary: 4, brand: 5, no_overtime: 5,
+    stability: 4, commute: 3, tech_fit: 5,
+  };
+  renderPriorityStars();
+
+  // 触发 autosave 立刻落盘
+  flushAutoSave();
+  appendLog('✓ 已填入演示画像 — API key 还需要你自己填一个真实的');
+  alert('✓ 演示画像填好了!\n\n下一步:\n1. 填一个真实的 AI API key(推荐 DeepSeek,扫 100 个岗位 < ¥1)\n2. 点 🧪 测试模型连通\n3. 切到「搜索」tab 配关键词 + 城市\n4. 切到「运行」tab 点 🚀');
+});
+
 $('testPush').addEventListener('click', async () => {
   const api = apiFromUI();
   if (!api.wxpusher_token || !api.wxpusher_uid) {

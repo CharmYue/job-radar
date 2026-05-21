@@ -1173,8 +1173,9 @@ async function refreshScored() {
           <td style="padding:5px 6px;white-space:nowrap;color:#9ca3af">${formatRelativeTime(it.publish_time || '')}</td>
           <td style="padding:5px 6px;color:#555">${escapeHtml((it.score_reason || '').slice(0, 50))}</td>
           <td style="padding:5px 6px;text-align:center;white-space:nowrap">
-            <button class="tb-open outline" style="font-size:10px;padding:1px 4px">🔗</button>
-            <button class="tb-apply ${isApplied ? 'green' : 'outline'}" style="font-size:10px;padding:1px 4px">${isApplied ? '✓' : '投'}</button>
+            <button class="tb-open outline" style="font-size:10px;padding:1px 4px" title="打开">🔗</button>
+            <button class="tb-apply ${isApplied ? 'green' : 'outline'}" style="font-size:10px;padding:1px 4px" title="标记已投">${isApplied ? '✓' : '投'}</button>
+            <button class="tb-del outline" style="font-size:10px;padding:1px 4px" title="删除">🗑</button>
           </td>
         </tr>
       `;
@@ -1189,6 +1190,11 @@ async function refreshScored() {
       });
       tr.querySelector('.tb-apply').addEventListener('click', async () => {
         await chrome.runtime.sendMessage({ type: 'mark_job', job_id: jobId, mark: item.marked === 'applied' ? null : 'applied' });
+        refreshScored();
+      });
+      tr.querySelector('.tb-del').addEventListener('click', async () => {
+        if (!confirm(`删除「${item.job_name}」?不可恢复`)) return;
+        await chrome.runtime.sendMessage({ type: 'delete_job', job_id: jobId });
         refreshScored();
       });
     });
@@ -1270,6 +1276,16 @@ async function refreshScored() {
       await chrome.runtime.sendMessage({ type: 'mark_job', job_id: it.job_id, mark: 'not_interested', block_company: true });
       refreshScored();
     });
+    const delBtn = document.createElement('button');
+    delBtn.className = 'outline';
+    delBtn.textContent = '🗑 删除';
+    delBtn.title = '从数据池里彻底删除此岗位 — 不可恢复';
+    delBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm(`删除「${it.job_name}」?不可恢复`)) return;
+      await chrome.runtime.sendMessage({ type: 'delete_job', job_id: it.job_id });
+      refreshScored();
+    });
     if (it.score_pitch) {
       const copyBtn = document.createElement('button');
       copyBtn.className = 'outline';
@@ -1282,7 +1298,7 @@ async function refreshScored() {
       });
       actions.appendChild(copyBtn);
     }
-    actions.append(openBtn, applyBtn, skipBtn);
+    actions.append(openBtn, applyBtn, skipBtn, delBtn);
     exp.appendChild(actions);
     row.appendChild(exp);
     list.appendChild(row);
@@ -1353,6 +1369,29 @@ document.querySelectorAll('#resultFilters .fchip').forEach((c) => {
 // 全屏看板 — 开新 tab,数据多/列多时舒服很多
 $('openDashboard').addEventListener('click', () => {
   chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') });
+});
+
+// 批量清理按钮
+async function bulkDeleteByPriority(priorities, label) {
+  const count = priorities.includes('unscored')
+    ? '所有未打分'
+    : `所有 ${priorities.join(' / ')} 档`;
+  if (!confirm(`删除${count}的岗位?\n(已标"已投"的会保留)\n不可恢复`)) return;
+  const r = await chrome.runtime.sendMessage({ type: 'delete_by_priority', priorities });
+  if (r && r.ok) {
+    appendLog(`✓ 删除 ${r.deleted} 条 (${label})`);
+    refreshScored();
+  }
+}
+$('deleteReject').addEventListener('click', () => bulkDeleteByPriority(['Reject'], 'Reject'));
+$('deleteCReject').addEventListener('click', () => bulkDeleteByPriority(['C', 'Reject'], 'C + Reject'));
+$('deleteUnscored').addEventListener('click', () => bulkDeleteByPriority(['unscored'], '未打分'));
+$('deleteAllPool').addEventListener('click', async () => {
+  if (!confirm('⚠ 清空整个数据池?\n所有岗位(包括 S/A/已投)都会被删除。\n不可恢复!\n\n确定继续?')) return;
+  if (!confirm('再确认一次:真的要删光?')) return;
+  await chrome.runtime.sendMessage({ type: 'clear' });
+  appendLog('✓ 数据池已清空');
+  refreshScored();
 });
 // CSV 下载 — 当前 filter 下的全部条目
 $('downloadCsv').addEventListener('click', async () => {

@@ -657,6 +657,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: true, ...r });
           break;
         }
+        case 'delete_job': {
+          if (!msg.job_id) { sendResponse({ ok: false, error: 'missing job_id' }); break; }
+          await jobsDelete(msg.job_id);
+          sendResponse({ ok: true });
+          break;
+        }
+        case 'delete_by_priority': {
+          // 批量删除指定档位的岗位(applied 永远保留)
+          const targets = Array.isArray(msg.priorities) ? msg.priorities : [msg.priority];
+          const all = await jobsListAll();
+          let deleted = 0;
+          for (const j of all) {
+            const m = j.marked || j.user_marked;
+            if (m === 'applied') continue;  // 投了的留着
+            const p = j.score_priority || '';
+            if (targets.includes(p) || (targets.includes('unscored') && !p)) {
+              await jobsDelete(j.job_id);
+              deleted++;
+            }
+          }
+          log(`✓ 删除 ${deleted} 条 (档位: ${targets.join('/')})`);
+          sendResponse({ ok: true, deleted });
+          break;
+        }
         case 'pipeline_status': {
           sendResponse({
             ok: true,

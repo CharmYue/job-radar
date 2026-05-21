@@ -160,6 +160,7 @@ function render() {
         <td class="action-cell">
           <button class="btn act-apply">${it.marked === 'applied' ? '✓已投' : '标记已投'}</button>
           <button class="btn act-block" style="color:#9b1c1c">屏蔽</button>
+          <button class="btn act-del" title="从数据池删除(不可恢复)">🗑</button>
         </td>
       </tr>
     `;
@@ -183,7 +184,23 @@ function render() {
       });
       loadJobs();
     });
+    tr.querySelector('.act-del').addEventListener('click', async () => {
+      if (!confirm(`删除「${it.job_name}」?不可恢复`)) return;
+      await chrome.runtime.sendMessage({ type: 'delete_job', job_id: jobId });
+      loadJobs();
+    });
   });
+}
+
+// 批量清理
+async function bulkDeleteByPriority(priorities, label) {
+  const count = priorities.includes('unscored') ? '所有未打分' : `所有 ${priorities.join(' / ')} 档`;
+  if (!confirm(`删除${count}的岗位?\n(已标"已投"的会保留)\n不可恢复`)) return;
+  const r = await chrome.runtime.sendMessage({ type: 'delete_by_priority', priorities });
+  if (r && r.ok) {
+    alert(`✓ 已删除 ${r.deleted} 条 (${label})`);
+    loadJobs();
+  }
 }
 
 // 事件绑定
@@ -212,6 +229,16 @@ document.querySelectorAll('th[data-sort]').forEach((th) => {
   });
 });
 $('refreshBtn').addEventListener('click', loadJobs);
+$('bulkDelReject').addEventListener('click', () => bulkDeleteByPriority(['Reject'], 'Reject'));
+$('bulkDelCReject').addEventListener('click', () => bulkDeleteByPriority(['C', 'Reject'], 'C + Reject'));
+$('bulkDelUnscored').addEventListener('click', () => bulkDeleteByPriority(['unscored'], '未打分'));
+$('bulkDelAll').addEventListener('click', async () => {
+  if (!confirm('⚠ 清空整个数据池?\n所有岗位(包括 S/A/已投)都会被删除。\n不可恢复!\n\n确定?')) return;
+  if (!confirm('再确认一次:真的要删光?')) return;
+  await chrome.runtime.sendMessage({ type: 'clear' });
+  alert('✓ 数据池已清空');
+  loadJobs();
+});
 $('closeBtn').addEventListener('click', async () => {
   // 关掉当前 tab — 先试 chrome.tabs.remove(currentTabId),不行 fallback window.close()
   try {

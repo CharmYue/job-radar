@@ -877,13 +877,20 @@
             <th style="padding:5px 6px;border-bottom:1px solid #e5e7eb" title="HR 上次活跃">HR</th>
             <th style="padding:5px 6px;border-bottom:1px solid #e5e7eb" title="岗位发布时间">发布</th>
             <th style="padding:5px 6px;border-bottom:1px solid #e5e7eb">理由</th>
-            <th style="padding:5px 6px;border-bottom:1px solid #e5e7eb;text-align:center;width:80px">操作</th>
+            <th style="padding:5px 6px;border-bottom:1px solid #e5e7eb;text-align:center;width:100px">操作</th>
           </tr>
         </thead>
         <tbody id="scoredTableBody"></tbody>
       </table>
     </div>
     <div class="muted" id="scoreSummary" style="margin-top:4px"></div>
+    <div style="margin-top:8px;padding-top:8px;border-top:1px dashed #e5e7eb;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+      <span class="muted" style="font-size:11px;margin-right:4px">🗑 清理:</span>
+      <button id="deleteReject" class="outline" style="font-size:11px;padding:2px 8px" title="删除所有 Reject 档岗位">删 Reject</button>
+      <button id="deleteCReject" class="outline" style="font-size:11px;padding:2px 8px" title="删除所有 C + Reject 档岗位">删 C + Reject</button>
+      <button id="deleteUnscored" class="outline" style="font-size:11px;padding:2px 8px" title="删除所有未打分的岗位">删未打分</button>
+      <button id="deleteAllPool" class="red" style="font-size:11px;padding:2px 8px;margin-left:auto" title="清空整个数据池 — 不可恢复">⚠ 清空全部</button>
+    </div>
   </div>
 
   <div id="log"></div>

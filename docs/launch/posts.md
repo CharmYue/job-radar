@@ -109,6 +109,8 @@
 🛠 chrome://extensions/ 加载已解压 → 选 extension/ 文件夹,5 分钟跑通
 📺 B 站演示视频:bilibili.com/video/BV15XLi6qECr
 
+⚖ 自己电脑、自己账号、本地数据 — 不是爬虫,Boss 自家 JS 怎么发的就怎么用,投递还是要自己手动点。
+
 求职的姐妹/兄弟试一下,真的能省命。
 
 #求职 #boss直聘 #ai工具 #校招 #社招 #秋招 #程序员 #找工作 #chrome插件 #拿offer #面试 #开源工具
@@ -140,6 +142,8 @@ GitHub: CharmYue/job-radar
 B 站演示: bilibili.com/video/BV15XLi6qECr
 chrome://extensions/ 加载已解压,5 分钟搞定
 
+⚖ 自己电脑、自己账号、本地数据,不是爬虫,投递还是手动
+
 #求职 #boss直聘 #ai工具 #chrome插件 #找工作 #秋招 #社招
 ```
 
@@ -164,6 +168,8 @@ chrome://extensions/ 加载已解压,5 分钟搞定
 打了 13 个 issue 修了 9 个 commit,有几个坑很 MV3 specific,比如 alarm 30s 最小 delay / SW 杀掉前没 finalize / 两个 storage 写者同 key 不同 schema 互相覆盖...
 
 开源 MIT:github.com/CharmYue/job-radar
+
+性质上是个"增强浏览器书签":只观察 Boss 自家 JS 已经返回到用户浏览器的数据,不主动发请求 / 不绕过任何技术管控 / 数据本地存。投递还是用户在 Boss App / 网页手动点,工具不替代。
 
 发现一个 takeaway:同一个 storage key 给两个写者用 + schema 还不一样 = 静默 corruption + 单元测试也测不出来(单个函数都没毛病,联合起来才出 bug)。下次设计存储层先列清楚 "每个 key 谁拥有 / 什么 schema"。
 ```

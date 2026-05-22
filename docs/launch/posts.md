@@ -2,16 +2,57 @@
 
 为不同平台准备的文案。所有标题都加了**钩子+痛点+数据+保证**的爆款结构。
 
-## 📸 配图建议(基于现有素材 docs/img/)
+## 📸 配图清单(直接 copy 用)
 
-| 平台 | 主图 (封面) | 第 2 张 | 第 3 张 | 第 4 张 | 第 5 张 |
-|---|---|---|---|---|---|
-| **小红书 主推贴** | `dashboard-hero.png` (全屏看板满数据,加大字标题) | `ui-run-cards.png` (运行卡片视图) | `csv-in-excel.png` (CSV 导 Excel) | `ui-profile.png` (画像配置) | `dashboard-list.png` |
-| **小红书 短版** | `dashboard-hero.png` | `ui-run-cards.png` | `csv-in-excel.png` | — | — |
-| **即刻 技术向** | `dashboard-hero.png` | (单图够了) | — | — | — |
-| **即刻 用户向** | `dashboard-hero.png` (加大字"5 分钟筛 300 岗位") | `ui-run-cards.png` | `csv-in-excel.png` | — | — |
-| **V2EX** | (链接 GitHub README,无图) | — | — | — | — |
-| **X / Twitter** | `dashboard-hero.png` | — | — | — | — |
+### 小红书 · 主推贴 — **9 张图**(最强冲击力配置)
+
+| # | 文件名 | 这一张要传递什么 | 说明 / 备注 |
+|---|---|---|---|
+| 1 (封面) | `dashboard-hero.png` + 大字标题 | "找工作 2 个月 0 面试 → 装这个第 3 天约面 5 家 😭" | **必加大字标题** — 见下文工具推荐 |
+| 2 | `wxpusher-mobile-3-daily.png` | 微信收到当天 A 级 126 条岗位 | 手机图最有"持续使用"说服力 |
+| 3 | `wxpusher-mobile-5-boss-hr.png` | 点链接直接跳 Boss App 跟 HR 聊 | **闭环高潮**,小红书最爱 |
+| 4 | `ui-profile.png` | 简历 + 6 维偏好告诉它一次 | 展示"how it works" |
+| 5 | `ui-run-cards.png` | 一键 🚀,扩展自动跑 | 阶段条 + 卡片实时显示 |
+| 6 | `dashboard-list.png` | S→A→B→C 自动分档,排序/过滤/搜索全有 | 全屏看板 |
+| 7 | `csv-in-excel.png` | 一键导 Excel,二次筛 | "数据自由"的安全感 |
+| 8 | `install-03-loaded.png` | 5 分钟装好,Chrome 卡片显示 v6.x | 降低门槛 |
+| 9 | `wxpusher-mobile-1-list.png` | 已经累积用了好几天 | 收尾,**社交证明** |
+
+### 小红书 · 短版 — **6 张图**
+
+| # | 文件名 |
+|---|---|
+| 1 (封面) | `dashboard-hero.png` + 大字标题 |
+| 2 | `wxpusher-mobile-3-daily.png` |
+| 3 | `wxpusher-mobile-5-boss-hr.png` |
+| 4 | `ui-run-cards.png` |
+| 5 | `dashboard-list.png` |
+| 6 | `csv-in-excel.png` |
+
+### 即刻 · 用户向 — **3 张图**(够了)
+
+| # | 文件名 | 这一张传递什么 |
+|---|---|---|
+| 1 | `dashboard-hero.png` + 大字标题 | "5 分钟筛 300 个岗位" |
+| 2 | `ui-run-cards.png` | 一键流水线 + 卡片视图 |
+| 3 | `wxpusher-mobile-3-daily.png` | 手机收到完整清单 |
+
+### 即刻 · 技术向 — **1 张图**
+
+| # | 文件名 | 备注 |
+|---|---|---|
+| 1 | `dashboard-hero.png`(**不**加大字标题,纯技术展示) | 即刻技术圈不喜欢营销味,纯产品截图最 sincere |
+
+### X / Twitter (英文)— **1-2 张图**
+
+| # | 文件名 | 备注 |
+|---|---|---|
+| 1 | `dashboard-hero.png` | 国际化群体看截图比看文字快 |
+| 2 (可选) | `wxpusher-mobile-3-daily.png` | 解释 mobile push 部分 |
+
+### V2EX — **无图**
+
+直接放 GitHub README 链接,标题点进去看 README 即可。技术社区上传图反而显得 spam。
 
 ### ⚠️ 发布前打码提醒
 

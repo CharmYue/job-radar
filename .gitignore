@@ -38,6 +38,10 @@ launchd/com.jobradar.bossreminder.plist
 .vscode/
 .claude/
 
+# Launch raw assets — original screenshots / videos before processing
+# (Processed images live in docs/img/ which IS committed)
+docs/素材/
+
 # Alternative Boss crawler experiments (parallel to extension/, not authoritative)
 boss_drission.py
 boss_setup_login.py

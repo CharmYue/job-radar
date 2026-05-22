@@ -6,7 +6,9 @@
 >
 > ✅ **零封号风险**:不爬接口,只观察浏览器自家返回 · ✅ **本地运行**:数据不出你电脑 · ✅ **用你自己的 AI key**:扫 100 个岗位 < ¥1
 
-![version](https://img.shields.io/badge/version-6.2.2-brightgreen) ![Chrome MV3](https://img.shields.io/badge/Chrome-MV3-blue) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
+![version](https://img.shields.io/badge/version-6.3.0-brightgreen) ![Chrome MV3](https://img.shields.io/badge/Chrome-MV3-blue) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
+
+![全屏看板:AI 打完分后,80 条岗位按 S/A/B 自动排好,每条带评分理由 + 担忧 + HR 活跃度 + 一键打开/标记已投](docs/img/dashboard-hero.png)
 
 ---
 
@@ -59,7 +61,15 @@
 git clone https://github.com/CharmYue/job-radar.git
 ```
 
-打开 `chrome://extensions/` → 右上角开**开发者模式** → 点**加载已解压的扩展程序** → 选 `extension/` 目录。
+![git clone job-radar](docs/img/install-01-clone.png)
+
+打开 `chrome://extensions/` → 右上角开**开发者模式** → 点**加载已解压的扩展程序** → 选 `extension/` 目录:
+
+![加载已解压扩展,选 extension 目录](docs/img/install-02-load-folder.png)
+
+加载成功后扩展卡片显示版本号:
+
+![Boss 求职雷达 6.x 已加载](docs/img/install-03-loaded.png)
 
 (看不到图标就在工具栏右边点拼图,把"Boss 求职雷达"钉住。)
 
@@ -67,8 +77,10 @@ git clone https://github.com/CharmYue/job-radar.git
 
 点扩展图标 → **画像** tab:
 
+![画像 tab:完成度面板会告诉你缺什么,WxPusher 是可选的](docs/img/ui-profile.png)
+
 - **你的需求**:一句话,例 "找 AI 解决方案岗位,年包 45-55,大厂优先,稳定不加班"
-- **完整简历**:粘贴你的 Markdown 简历(技术栈、年限、项目经验)
+- **完整简历**:粘贴你的 Markdown 简历(技术栈、年限、项目经验) — 不想自己写?点 **📋 填入演示画像** 一键加载样例
 - **薪资期望**:拖滑块(月薪下限 / 上限 / 年包目标)
 - **偏好权重**:6 维星级(薪资 / 大厂 / 不加班 / 稳定 / 通勤 / 技术栈契合)
 - **AI 模型**:选 provider(推荐 DeepSeek,便宜快),填 API key,点 🧪 **测试模型连通**
@@ -94,12 +106,20 @@ git clone https://github.com/CharmYue/job-radar.git
 
 切到 **运行** tab → 点 **🚀 跑一轮**。
 
+![运行 tab:一键流水线 + 阶段条 + 卡片视图实时显示](docs/img/ui-run-cards.png)
+
 扩展会:
 1. **采集**:打开 Boss 列表页(可最小化),滚动抓数据,每个任务之间用 alarm 接力(SW 死了自动续跑)
 2. **打分**:LLM 并发 6 路给每个岗位评分,带理由 + 担忧 + 招呼语
 3. **推送**(可选):WxPusher 拆 S 级和 A 级两次推送到微信
 
-跑完点 **🖥 全屏** 看完整看板,按公司/分数/HR 活跃度排序,标记已投或屏蔽烂公司,**📥 CSV** 一键导 Excel。
+跑完点 **🖥 全屏** 看完整看板,按公司/分数/HR 活跃度排序,标记已投或屏蔽烂公司:
+
+![全屏看板:13 列详情,按表头排序、全文搜索、批量清理](docs/img/dashboard-list.png)
+
+**📥 CSV** 一键导 Excel,二次筛(我自己的 SOP:HR 今日活跃 + A 级以上 + 不投朝阳区):
+
+![CSV 在 WPS / Excel 中打开:中文不乱码,19 列详情](docs/img/csv-in-excel.png)
 
 ---
 
@@ -112,11 +132,13 @@ cd ~/job-radar          # 当年 clone 的目录
 git pull                # 拉最新代码
 ```
 
+![git pull 拉最新代码](docs/img/upgrade-pull.png)
+
 然后在 Chrome 里:
 
 3. `chrome://extensions/` → 找到「Boss 求职雷达」卡片 → 点卡片右下角**🔄 刷新图标**(或者直接关 Chrome 再开)
 
-确认版本:扩展卡片下方应该显示当前 `manifest.json` 里的版本号(比如 `6.2.3`)。你之前填的画像/AI key/搜索预设/数据池**都不会丢** — 数据全在 IndexedDB + chrome.storage,跟 git 代码独立。
+确认版本:扩展卡片下方应该显示当前 `manifest.json` 里的版本号(比如 `6.3.0`)。你之前填的画像/AI key/搜索预设/数据池**都不会丢** — 数据全在 IndexedDB + chrome.storage,跟 git 代码独立。
 
 > 想看每次更新做了什么:`git log --oneline -20` 看最近 20 条 commit。
 
@@ -147,6 +169,14 @@ extension/
 - **风控感知**:连续 3 次拿到 Boss `code=37` 自动冷却 30 分钟。
 
 详见 [`docs/extension.md`](docs/extension.md)。
+
+---
+
+## 🎬 视频演示
+
+> **📺 完整流程录像** — 安装 → 配画像 → 跑一轮 → 看结果 → 导 CSV
+>
+> 视频文件 ~40MB,见 [GitHub Releases](https://github.com/CharmYue/job-radar/releases) 或这里的 [B 站演示](https://www.bilibili.com/) (TBD)。
 
 ---
 

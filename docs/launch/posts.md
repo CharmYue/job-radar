@@ -2,6 +2,43 @@
 
 为不同平台准备的文案。所有标题都加了**钩子+痛点+数据+保证**的爆款结构。
 
+## 📸 配图建议(基于现有素材 docs/img/)
+
+| 平台 | 主图 (封面) | 第 2 张 | 第 3 张 | 第 4 张 | 第 5 张 |
+|---|---|---|---|---|---|
+| **小红书 主推贴** | `dashboard-hero.png` (全屏看板满数据,加大字标题) | `ui-run-cards.png` (运行卡片视图) | `csv-in-excel.png` (CSV 导 Excel) | `ui-profile.png` (画像配置) | `dashboard-list.png` |
+| **小红书 短版** | `dashboard-hero.png` | `ui-run-cards.png` | `csv-in-excel.png` | — | — |
+| **即刻 技术向** | `dashboard-hero.png` | (单图够了) | — | — | — |
+| **即刻 用户向** | `dashboard-hero.png` (加大字"5 分钟筛 300 岗位") | `ui-run-cards.png` | `csv-in-excel.png` | — | — |
+| **V2EX** | (链接 GitHub README,无图) | — | — | — | — |
+| **X / Twitter** | `dashboard-hero.png` | — | — | — | — |
+
+### ⚠️ 发布前打码提醒
+
+- `dashboard-hero.png` / `dashboard-list.png` / `ui-run-cards.png` 里有真实公司名 — Boss 平台上虽然是公开招聘信息,但**为避免任何争议**,建议:
+  - 用 [CleanShot X](https://cleanshot.com/) 或 macOS Preview 的"框选 → 像素化"
+  - 对"公司"那一列做模糊
+  - 评分理由里的具体公司名也一起模糊
+- `ui-profile.png` 里**自己的真实信息** — summary / 简历片段可能包含个人偏好。如果不想暴露就模糊或者**用 📋 填入演示画像**重新截一张
+- `csv-in-excel.png` 同上 — 链接列里有岗位 ID 可识别到具体公司
+
+### 🎬 大字标题加法
+
+主图(`dashboard-hero.png`)用作小红书封面时,在上面**叠加大字标题**让吸引力翻倍。推荐工具:
+
+- **CleanShot X** → 截图后的"标注"模式
+- **稿定设计** / **创客贴** → 中文小红书风模板
+- **Canva** → 国际化模板
+- **Figma**(免费)→ 自由度高
+
+大字标题建议(挑一个):
+- "**找工作 2 个月 0 面试 → 装这个第 3 天约面 5 家** 😭"
+- "**Boss 上 300 岗位 AI 5 分钟筛完 这是黑魔法?**"
+- "**HR 已读不回?装这个救了我**"
+- "**0 封号 · 投递回复率 5% → 50%**"
+
+---
+
 **核心钩子词库**(按需挑):
 - 🔥 神仙工作 / 神仙 offer / 拿捏 / 锁定
 - 🔥 0 封号 / 零风险 / 不爬接口

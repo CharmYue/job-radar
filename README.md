@@ -123,6 +123,31 @@ git clone https://github.com/CharmYue/job-radar.git
 
 ---
 
+## 📱 手机随时刷岗位(可选 — WxPusher)
+
+如果填了 WxPusher,跑完流水线会**自动把 S/A 级推到你微信**,上班路上手机点链接直接打开 Boss App 跟 HR 聊。
+
+<table>
+<tr>
+<td><img src="docs/img/wxpusher-mobile-1-list.png" alt="WxPusher 消息列表" width="220"></td>
+<td><img src="docs/img/wxpusher-mobile-3-daily.png" alt="每日推送详情" width="220"></td>
+<td><img src="docs/img/wxpusher-mobile-5-boss-hr.png" alt="Boss App 立即沟通 HR" width="220"></td>
+</tr>
+<tr>
+<td align="center">① 微信收到累积清单</td>
+<td align="center">② 点开看当天 A 级 126 条</td>
+<td align="center">③ 点链接直接跳 Boss App 聊 HR</td>
+</tr>
+</table>
+
+**完整闭环**:扩展跑分 → 微信推送 → 手机点链接 → Boss App → 找 HR 聊。**5 分钟把当天 A 级岗位全聊完。**
+
+> 📖 完整配置教程(5 分钟,免费):**[docs/wxpusher-setup.md](docs/wxpusher-setup.md)**
+
+不想用?直接画像 tab 里 WxPusher 两个框**留空**就行,所有结果都在数据池 / 看板 / CSV 里。
+
+---
+
 ## 🔄 升级到最新版
 
 之前 `git clone` 过的用户,3 步更新:

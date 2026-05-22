@@ -199,9 +199,11 @@ extension/
 
 ## 🎬 视频演示
 
-> **📺 完整流程录像** — 安装 → 配画像 → 跑一轮 → 看结果 → 导 CSV
->
-> 视频文件 ~40MB,见 [GitHub Releases](https://github.com/CharmYue/job-radar/releases) 或这里的 [B 站演示](https://www.bilibili.com/) (TBD)。
+**📺 完整流程录像(B 站)** — 安装 → 配画像 → 跑一轮 → 看结果 → 手机收推送 → 跟 HR 聊:
+
+[![B 站演示视频](https://img.shields.io/badge/▶_点击观看_B站演示-FB7299?style=for-the-badge&logo=bilibili&logoColor=white)](https://www.bilibili.com/video/BV15XLi6qECr/)
+
+🔗 https://www.bilibili.com/video/BV15XLi6qECr/
 
 ---
 

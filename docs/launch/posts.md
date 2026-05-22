@@ -107,6 +107,7 @@
 
 📦 GitHub:CharmYue/job-radar
 🛠 chrome://extensions/ 加载已解压 → 选 extension/ 文件夹,5 分钟跑通
+📺 B 站演示视频:bilibili.com/video/BV15XLi6qECr
 
 求职的姐妹/兄弟试一下,真的能省命。
 
@@ -136,6 +137,7 @@
 🆓 MIT 开源,数据完全本地
 
 GitHub: CharmYue/job-radar
+B 站演示: bilibili.com/video/BV15XLi6qECr
 chrome://extensions/ 加载已解压,5 分钟搞定
 
 #求职 #boss直聘 #ai工具 #chrome插件 #找工作 #秋招 #社招
@@ -194,6 +196,7 @@ chrome://extensions/ 加载已解压,5 分钟搞定
 🆓 MIT 开源,本地数据不上传
 
 GitHub: CharmYue/job-radar
+B 站演示: bilibili.com/video/BV15XLi6qECr
 ```
 
 ---
@@ -235,6 +238,7 @@ Open source MIT: github.com/CharmYue/job-radar
 
 ```
 📦 GitHub: https://github.com/CharmYue/job-radar
+📺 B 站演示: https://www.bilibili.com/video/BV15XLi6qECr/
 🔧 Chrome MV3 扩展,本地运行,用你自己的 AI API key
 📜 MIT 开源
 
